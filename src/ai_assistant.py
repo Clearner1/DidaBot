@@ -18,10 +18,12 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, date
 
 import kosong
-from kosong.chat_provider.openai_legacy import OpenAILegacy
 from kosong.message import Message
 from kosong.tooling.simple import SimpleToolset
 from kosong import StepResult
+
+# 修复导入路径
+from kosong.contrib.chat_provider.anthropic import Anthropic
 
 from dida_client import DidaClient
 from tools.dida_tools import (
@@ -39,27 +41,32 @@ class AIAssistant:
 
     def __init__(
         self,
-        api_key: str,
-        base_url: str = "https://api.moonshot.ai/v1",
-        model: str = "kimi-k2-turbo-preview",
+        anthropic_api_key: Optional[str] = None,
+        anthropic_base_url: str = "https://api.anthropic.com",
+        anthropic_model: str = "claude-3-5-sonnet-20241022",
         dida_client: Optional[DidaClient] = None,
     ):
         """初始化AI助手
 
         Args:
-            api_key: AI API密钥
-            base_url: API基础URL，支持OpenAI兼容格式
-            model: 模型名称
+            anthropic_api_key: Anthropic兼容API密钥 (GLM等)
+            anthropic_base_url: API基础URL
+            anthropic_model: 模型名称
             dida_client: 滴答清单客户端实例
         """
         self.dida_client = dida_client
 
-        # 创建聊天提供商（支持OpenAI兼容API）
-        self.chat_provider = OpenAILegacy(
-            model=model,
-            api_key=api_key,
-            base_url=base_url,
-        )
+        # 使用Anthropic(GLM)
+        if anthropic_api_key:
+            self.chat_provider = Anthropic(
+                model=anthropic_model,
+                api_key=anthropic_api_key,
+                base_url=anthropic_base_url,
+                default_max_tokens=4096,  # 设置默认最大token数
+            )
+            self.provider_type = "anthropic(glm)"
+        else:
+            raise ValueError("请配置ANTHROPIC_API_KEY")
 
         # 创建工具集
         self.toolset = SimpleToolset()
@@ -97,28 +104,43 @@ class AIAssistant:
             是否是今天的任务
         """
         try:
-            # 检查是否是全天任务
-            if task.get("is_all_day"):
-                return True
+            # 获取当前本地日期（与用户界面保持一致）
+            today_local = date.today()
 
-            # 检查截止日期
+            # 检查截止日期（优先）
             due_date = task.get("due_date")
             if due_date:
                 # 解析ISO格式日期
                 if isinstance(due_date, str):
                     if "T" in due_date:
-                        # 包含时间，解析日期部分
-                        task_date = datetime.fromisoformat(
+                        # 包含时间，解析UTC日期然后转换为本地日期
+                        task_dt_utc = datetime.fromisoformat(
                             due_date.replace("Z", "+00:00")
-                        ).date()
+                        )
+                        # 转换为本地时区日期
+                        task_date_local = task_dt_utc.astimezone().date()
                     else:
-                        # 只有日期
-                        task_date = datetime.fromisoformat(due_date).date()
+                        # 只有日期，假设是本地日期
+                        task_date_local = datetime.fromisoformat(due_date).date()
 
-                    today = date.today()
-                    return task_date == today
+                    return task_date_local == today_local
+
+            # 检查开始日期（作为备选）
+            start_date = task.get("start_date")
+            if start_date:
+                if isinstance(start_date, str):
+                    if "T" in start_date:
+                        task_dt_utc = datetime.fromisoformat(
+                            start_date.replace("Z", "+00:00")
+                        )
+                        task_date_local = task_dt_utc.astimezone().date()
+                    else:
+                        task_date_local = datetime.fromisoformat(start_date).date()
+
+                    return task_date_local == today_local
 
             return False
+
         except Exception as e:
             logger.warning(f"判断任务日期失败: {e}, task={task}")
             return False
@@ -154,17 +176,23 @@ class AIAssistant:
 
             # 1. 如果有工具调用结果，先处理结果
             for tool_result in tool_results:
-                if not tool_result.is_ok:
-                    response_parts.append(f"执行失败: {tool_result.error}")
-                    continue
+                # 从ToolOk/ToolError中提取实际结果
+                actual_output = tool_result.result.output if hasattr(tool_result.result, 'output') else tool_result.result
+                error_msg = getattr(tool_result.result, 'message', None)
 
-                output = tool_result.output
+                # 获取工具调用的名称（需要从原始消息中查找）
+                tool_call_name = None
+                if result.message and result.message.tool_calls:
+                    for tc in result.message.tool_calls:
+                        if tc.id == tool_result.tool_call_id:
+                            tool_call_name = tc.function.name
+                            break
 
                 # 处理获取项目
-                if isinstance(output, list) and tool_result.tool_call.function.name == "get_projects":
-                    if output:
+                if isinstance(actual_output, list) and tool_call_name == "get_projects":
+                    if actual_output:
                         response_parts.append("项目列表:")
-                        for project in output:
+                        for project in actual_output:
                             status = "已关闭" if project.get("closed") else "活跃"
                             response_parts.append(
                                 f"  • {project.get('name')} (ID: {project.get('id')[:8]}..., {status})"
@@ -173,10 +201,10 @@ class AIAssistant:
                         response_parts.append("没有找到项目")
 
                 # 处理获取任务
-                elif isinstance(output, list) and tool_result.tool_call.function.name == "get_tasks":
-                    if output:
+                elif isinstance(actual_output, list) and tool_call_name == "get_tasks":
+                    if actual_output:
                         # 筛选今日任务
-                        today_tasks = [task for task in output if self._is_today_task(task)]
+                        today_tasks = [task for task in actual_output if self._is_today_task(task)]
 
                         if today_tasks:
                             response_parts.append("今日任务:")
@@ -211,11 +239,19 @@ class AIAssistant:
                         response_parts.append("没有找到任务")
 
                 # 处理完成任务
-                elif isinstance(output, dict) and tool_result.tool_call.function.name == "complete_task":
-                    if output.get("success"):
+                elif isinstance(actual_output, dict) and tool_call_name == "complete_task":
+                    if actual_output.get("success"):
                         response_parts.append("任务已完成！✅")
                     else:
-                        response_parts.append(f"完成任务失败: {output.get('message', '未知错误')}")
+                        response_parts.append(f"完成任务失败: {actual_output.get('message', '未知错误')}")
+
+                # 处理错误情况
+                elif isinstance(actual_output, dict) and "error" in actual_output:
+                    response_parts.append(f"执行失败: {actual_output['error']}")
+
+                # 处理ToolError
+                elif error_msg:
+                    response_parts.append(f"工具执行失败: {error_msg}")
 
             # 2. 添加AI的自然语言回复
             if result.message.content:
@@ -245,13 +281,15 @@ class AIAssistant:
             return f"抱歉，处理请求时出错: {str(e)}"
 
 
-# 测试用例
+# 测试用例（已禁用）
+# 如需测试，请取消注释下面的代码
+"""
 if __name__ == "__main__":
     import asyncio
     from config import get_config
 
     async def test():
-        """测试AI助手"""
+        打印测试AI助手
         print("=" * 60)
         print("测试AI助手")
         print("=" * 60)
@@ -266,13 +304,18 @@ if __name__ == "__main__":
         )
 
         try:
-            # 创建AI助手
-            ai = AIAssistant(
-                api_key="your_api_key",  # 需要替换为实际API密钥
-                base_url="https://api.moonshot.ai/v1",
-                model="kimi-k2-turbo-preview",
-                dida_client=dida_client
-            )
+            # 创建AI助手 - 使用GLM
+            if config.anthropic_api_key:
+                ai = AIAssistant(
+                    anthropic_api_key=config.anthropic_api_key,
+                    anthropic_base_url=config.anthropic_base_url,
+                    anthropic_model=config.anthropic_model,
+                    dida_client=dida_client
+                )
+                print(f"使用Anthropic GLM模型: {config.anthropic_model}")
+            else:
+                print("错误：请配置ANTHROPIC_API_KEY")
+                return
 
             # 测试1：查看今日任务
             print("\n测试1：询问今日任务")
@@ -292,3 +335,4 @@ if __name__ == "__main__":
             await dida_client.close()
 
     asyncio.run(test())
+"""

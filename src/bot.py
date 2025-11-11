@@ -66,22 +66,19 @@ class DidaBot:
             self.project_handlers = ProjectHandlers(self.dida_client)
 
             # 初始化AI助手（如果配置了API密钥）
-            if AI_AVAILABLE and self.config.ai_api_key:
+            if AI_AVAILABLE and self.config.anthropic_api_key:
                 print("正在初始化AI助手...")
                 self.ai_assistant = AIAssistant(
-                    api_key=self.config.ai_api_key,
-                    base_url=self.config.ai_base_url,
-                    model=self.config.ai_model,
+                    anthropic_api_key=self.config.anthropic_api_key,
+                    anthropic_base_url=self.config.anthropic_base_url,
+                    anthropic_model=self.config.anthropic_model,
                     dida_client=self.dida_client,
                 )
                 print("AI助手已启用")
             elif AI_AVAILABLE:
-                print("AI助手未启用：请配置 AI_API_KEY 环境变量")
+                print("AI助手未启用：请配置 ANTHROPIC_API_KEY 环境变量")
             else:
                 print("AI助手不可用：缺少依赖")
-
-            print("Bot 初始化成功!")
-            return True
 
             # 创建 Telegram Application
             print("正在创建Telegram应用...")

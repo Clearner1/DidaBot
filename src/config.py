@@ -3,7 +3,9 @@
 使用 Pydantic Settings 管理环境变量配置
 """
 
+from typing import Optional
 from pydantic_settings import BaseSettings
+from pathlib import Path
 
 
 class Config(BaseSettings):
@@ -17,13 +19,13 @@ class Config(BaseSettings):
     dida_access_token: str
     dida_base_url: str = "https://api.dida365.com"
 
-    # AI Assistant 配置（可选）
-    ai_api_key: Optional[str] = None
-    ai_base_url: str = "https://api.moonshot.ai/v1"
-    ai_model: str = "kimi-k2-turbo-preview"
+    # AI Assistant 配置（GLM）
+    anthropic_api_key: Optional[str] = None
+    anthropic_base_url: str = "https://open.bigmodel.cn/api/anthropic"
+    anthropic_model: str = "glm-4.6"
 
     class Config:
-        env_file = ".env"
+        env_file = str(Path(__file__).parent.parent / ".env")
         env_file_encoding = "utf-8"
 
     def __init__(self, **kwargs):
@@ -45,10 +47,12 @@ class Config(BaseSettings):
         print(f"  Bot Token: {self.telegram_bot_token[:20]}...")
         print(f"  Admin User ID: {self.bot_admin_user_id}")
         print(f"  Dida Token: {self.dida_access_token[:20]}...")
-        if self.ai_api_key:
-            print(f"  AI Assistant: 已启用 ({self.ai_model})")
+
+        # AI助手配置检查
+        if self.anthropic_api_key:
+            print(f"  GLM AI: 已启用 ({self.anthropic_model})")
         else:
-            print(f"  AI Assistant: 未启用 (如需使用请配置 AI_API_KEY)")
+            print(f"  AI Assistant: 未启用 (请配置 ANTHROPIC_API_KEY)")
 
 
 # 全局配置实例函数

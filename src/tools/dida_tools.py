@@ -38,7 +38,8 @@ class GetProjectsTool(CallableTool2[GetProjectsParams]):
     params: type[GetProjectsParams] = GetProjectsParams
 
     def __init__(self, dida_client: DidaClient):
-        self.dida_client = dida_client
+        super().__init__()
+        object.__setattr__(self, 'dida_client', dida_client)
 
     async def __call__(self, params: GetProjectsParams) -> ToolReturnType:
         try:
@@ -63,7 +64,8 @@ class GetTasksTool(CallableTool2[GetTasksParams]):
     params: type[GetTasksParams] = GetTasksParams
 
     def __init__(self, dida_client: DidaClient):
-        self.dida_client = dida_client
+        super().__init__()
+        object.__setattr__(self, 'dida_client', dida_client)
 
     async def __call__(self, params: GetTasksParams) -> ToolReturnType:
         try:
@@ -96,7 +98,8 @@ class CompleteTaskTool(CallableTool2[CompleteTaskParams]):
     params: type[CompleteTaskParams] = CompleteTaskParams
 
     def __init__(self, dida_client: DidaClient):
-        self.dida_client = dida_client
+        super().__init__()
+        object.__setattr__(self, 'dida_client', dida_client)
 
     async def __call__(self, params: CompleteTaskParams) -> ToolReturnType:
         try:
