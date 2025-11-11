@@ -149,8 +149,7 @@ Desktop.ini
 *.orig
 *.rej
 
-# Kosong framework (as submodule or external dependency)
-kosong/
+# Kosong framework (now included in the project)
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
