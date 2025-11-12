@@ -170,6 +170,145 @@ Authorization: Bearer {{token}}
 | `items.status` | 子任务的完成状态 | integer | 否 |
 | `items.completedTime` | 子任务完成时间，格式："yyyy-MM-dd'T'HH:mm:ssZ" (例如："2019-11-13T03:00:00+0000") | date | 否 |
 
+reminders字段使用ISO 8601持续时间格式，具体格式为：TRIGGER:P{天数}DT{小时数}H{分钟数}M{秒数}S
+
+  具体含义
+
+  1. "TRIGGER:P0DT9H0M0S" - 任务开始前9小时提醒
+    - P0D - 0天
+    - T9H - 9小时
+    - 0M - 0分钟
+    - 0S - 0秒
+  2. "TRIGGER:PT0S" - 任务开始时提醒（立即提醒）
+    - 没有天数（P后直接跟T）
+    - 0S - 0秒（即任务开始时立即提醒）
+  3. "TRIGGER:P0DT1H0M0S" - 任务开始前1小时提醒
+
+  常用组合示例
+
+  - ["TRIGGER:P0DT1H0M0S"] - 开始前1小时提醒
+  - ["TRIGGER:P1DT0H0M0S"] - 开始前1天提醒
+  - ["TRIGGER:P0DT2H30M0S"] - 开始前2小时30分钟提醒
+  - ["TRIGGER:P0DT15M0S"] - 开始前15分钟提醒
+
+  多提醒机制
+
+  文档中的["TRIGGER:P0DT9H0M0S", "TRIGGER:PT0S"]表示：
+  - 第一次提醒：任务开始前9小时
+  - 第二次提醒：任务开始时（立即提醒）
+
+滴答清单重复规则完整总结
+
+  1. 标准RFC 5545格式 (RRULE)
+
+  基本格式
+
+  RRULE:FREQ={频率};INTERVAL={间隔};[其他参数]
+
+  频率类型 (FREQ)
+
+  - DAILY - 每日
+  - WEEKLY - 每周
+  - MONTHLY - 每月
+  - YEARLY - 每年
+
+  间隔参数 (INTERVAL)
+
+  - INTERVAL=1 - 每1个周期（可省略）
+  - INTERVAL=2 - 每2个周期
+  - INTERVAL=3 - 每3个周期
+
+  指定日期参数
+
+  BYDAY (星期)
+
+  - MO - 周一, TU - 周二, WE - 周三
+  - TH - 周四, FR - 周五, SA - 周六, SU - 周日
+  - 多个用逗号分隔：BYDAY=MO,WE,FR
+
+  BYMONTHDAY (月份日期)
+
+  - 1-31 - 具体日期
+  - BYMONTHDAY=15 - 每月15号
+  - BYMONTHDAY=1,15 - 每月1号和15号
+
+  BYMONTH (月份)
+
+  - 1-12 - 具体月份
+  - BYMONTH=1,4,7,10 - 每季度第一个月
+
+  结束条件
+
+  - COUNT={数字} - 重复次数
+  - UNTIL={日期时间} - 结束时间
+
+  2. 滴答清单扩展格式
+
+  遗忘曲线格式 (ERULE)
+
+  ERULE:NAME=FORGETTINGCURVE;CYCLE={周期}
+  - 基于艾宾浩斯遗忘曲线算法
+  - 用于学习复习类任务
+  - CYCLE=0 可能表示初始循环
+
+  跳过规则 (TT_SKIP)
+
+  TT_SKIP=HOLIDAY,WEEKEND
+  - HOLIDAY - 跳过法定节假日
+  - WEEKEND - 跳过周末
+  - 可组合使用
+
+  3. 实用示例
+
+  工作日任务
+
+  # 方法1：指定工作日
+  "RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR"
+
+  # 方法2：跳过周末（更准确，包含节假日）
+  "RRULE:FREQ=DAILY;TT_SKIP=HOLIDAY,WEEKEND"
+
+  学习复习
+
+  # 遗忘曲线复习
+  "ERULE:NAME=FORGETTINGCURVE;CYCLE=0"
+
+  常见重复模式
+
+  # 每天重复
+  "RRULE:FREQ=DAILY"
+
+  # 每两天重复
+  "RRULE:FREQ=DAILY;INTERVAL=2"
+
+  # 每周一三五重复
+  "RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR"
+
+  # 每月15号重复
+  "RRULE:FREQ=MONTHLY;BYMONTHDAY=15"
+
+  # 每月第一个周一重复
+  "RRULE:FREQ=MONTHLY;BYDAY=1MO"
+
+  # 每年1月1日重复
+  "RRULE:FREQ=YEARLY;BYMONTH=1;BYMONTHDAY=1"
+
+  # 重复30次结束
+  "RRULE:FREQ=DAILY;COUNT=30"
+
+  # 到指定日期结束
+  "RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=20251231T235959Z"
+
+  4. 注意事项
+
+  1. 时区影响: 重复规则基于任务设定的时区
+  2. 格式灵活性: 可省略INTERVAL=1参数
+  3. 扩展功能: 遗忘曲线和跳过规则是滴答清单特色
+  4. API兼容性: 标准RRULE格式与其他日历应用兼容
+  5. 参数顺序: 不影响功能，但建议按规范顺序排列
+
+  这个重复规则系统既支持国际标准，又提供了适合中文用户习惯的扩展功能，非常灵活强大。
+
 **响应 (Responses):**
 
 | HTTP 状态码 | 描述 | Schema |

@@ -43,7 +43,8 @@ logger = logging.getLogger(__name__)
 (IDLE, ACTIVE) = range(2)
 
 # 对话超时时间（秒）
-CONVERSATION_TIMEOUT = 300  # 5分钟
+# 设置为 None 表示不自动超时，支持持续对话
+CONVERSATION_TIMEOUT = None
 
 
 class DidaBot:
@@ -87,6 +88,7 @@ class DidaBot:
                     anthropic_base_url=self.config.anthropic_base_url,
                     anthropic_model=self.config.anthropic_model,
                     dida_client=self.dida_client,
+                    max_history_length=15,  # 保留最近15条消息（约7-8轮对话）
                 )
                 print("AI助手已启用")
             elif AI_AVAILABLE:
@@ -151,6 +153,12 @@ class DidaBot:
                         ),
                         CommandHandler("cancel", self._handle_ai_cancel)
                     ],
+                    ConversationHandler.TIMEOUT: [
+                        MessageHandler(
+                            filters.TEXT & ~filters.COMMAND,
+                            self._handle_ai_timeout
+                        )
+                    ],
                 },
                 fallbacks=[
                     CommandHandler("cancel", self._handle_ai_cancel),
@@ -158,7 +166,7 @@ class DidaBot:
                 ],
                 conversation_timeout=CONVERSATION_TIMEOUT,
                 per_user=True,
-                allow_reentry=True
+                allow_reentry=False
             )
             self.application.add_handler(ai_conversation_handler)
             logger.info("AI对话处理器（ConversationHandler）已注册")
@@ -227,26 +235,25 @@ class DidaBot:
         user_message = update.message.text
         logger.info(f"AI对话开始: {user_message[:100]}...")
 
-        # 初始化对话历史（如果不存在）
-        if 'conversation_history' not in context.user_data:
-            context.user_data['conversation_history'] = []
+        # 强制清理旧状态（防御性编程，防止超时后残留数据）
+        context.user_data.clear()
 
-        # 更新用户数据中的活动时间
-        context.user_data['last_activity'] = datetime.now()
+        # 初始化对话历史
+        context.user_data['conversation_history'] = []
 
         # 设置状态为ACTIVE
         context.user_data['state'] = ACTIVE
 
-        # 显示正在输入状态
-        await update.message.chat.send_action("typing")
+        # 显示正在输入状态（添加异常处理）
+        try:
+            await update.message.chat.send_action("typing")
+        except TelegramError as e:
+            logger.warning(f"发送typing状态失败（继续处理）: {e}")
 
         try:
             # 调用AI助手处理消息，传递对话历史
             from kosong.message import Message
             history = context.user_data['conversation_history']
-
-            # 显示typing状态
-            await update.message.chat.send_action("typing")
 
             # 记录用户输入和开始处理
             logger.info(f"[用户输入] {user_message}")
@@ -255,19 +262,29 @@ class DidaBot:
             # 调用AI助手处理消息
             response = await self.ai_assistant.chat(user_message, history=history)
 
-            # 停止typing状态
-            await update.message.chat.send_action("cancel")
-
             # 发送回复（自动分页）
             await self._send_long_message(update, response)
 
             # 处理完成后保持ACTIVE状态，继续等待下一条消息
             return ACTIVE
 
+        except TelegramError as e:
+            logger.error(f"Telegram API错误: {e}")
+            try:
+                await update.message.reply_text("网络连接不稳定，请稍后再试...")
+            except TelegramError:
+                logger.error("无法发送错误消息，网络完全断开")
+            # 出错时结束对话
+            context.user_data.clear()
+            return ConversationHandler.END
         except Exception as e:
             logger.error(f"AI对话出错: {e}")
-            await update.message.chat.send_action("cancel")  # 停止typing
-            await update.message.reply_text(f"对话处理失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            try:
+                await update.message.reply_text(f"对话处理失败: {str(e)}")
+            except TelegramError:
+                logger.error("无法发送错误消息")
             # 出错时结束对话
             context.user_data.clear()
             return ConversationHandler.END
@@ -287,19 +304,16 @@ class DidaBot:
 
         logger.info(f"AI对话继续: {user_message[:100]}...")
 
-        # 更新用户数据中的活动时间
-        context.user_data['last_activity'] = datetime.now()
-
-        # 显示正在输入状态
-        await update.message.chat.send_action("typing")
+        # 显示正在输入状态（添加异常处理）
+        try:
+            await update.message.chat.send_action("typing")
+        except TelegramError as e:
+            logger.warning(f"发送typing状态失败（继续处理）: {e}")
 
         try:
             # 调用AI助手处理消息（使用累积的对话历史）
             from kosong.message import Message
-            history = context.user_data['conversation_history']
-
-            # 显示typing状态
-            await update.message.chat.send_action("typing")
+            history = context.user_data.get('conversation_history', [])
 
             # 记录用户输入和开始处理
             logger.info(f"[用户输入] {user_message}")
@@ -308,19 +322,29 @@ class DidaBot:
             # 调用AI助手处理消息
             response = await self.ai_assistant.chat(user_message, history=history)
 
-            # 停止typing状态
-            await update.message.chat.send_action("cancel")
-
             # 发送回复（自动分页）
             await self._send_long_message(update, response)
 
             # 处理完成后保持ACTIVE状态，继续等待下一条消息
             return ACTIVE
 
+        except TelegramError as e:
+            logger.error(f"Telegram API错误: {e}")
+            try:
+                await update.message.reply_text("网络连接不稳定，请稍后再试...")
+            except TelegramError:
+                logger.error("无法发送错误消息，网络完全断开")
+            # 出错时结束对话
+            context.user_data.clear()
+            return ConversationHandler.END
         except Exception as e:
             logger.error(f"AI对话出错: {e}")
-            await update.message.chat.send_action("cancel")  # 停止typing
-            await update.message.reply_text(f"对话处理失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            try:
+                await update.message.reply_text(f"对话处理失败: {str(e)}")
+            except TelegramError:
+                logger.error("无法发送错误消息")
             # 出错时结束对话
             context.user_data.clear()
             return ConversationHandler.END
@@ -338,6 +362,8 @@ class DidaBot:
 
     async def _handle_ai_timeout(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理AI对话超时"""
+        logger.info(f"对话超时清理 - 用户 {update.effective_user.id}")
+
         # 清理用户数据
         context.user_data.clear()
 

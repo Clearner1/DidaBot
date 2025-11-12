@@ -152,6 +152,41 @@ class TimeUtils:
             # 默认格式
             return TimeUtils.utc_to_local_str(due_date)
 
+    @staticmethod
+    def local_to_utc_str(local_datetime: datetime, format_iso: bool = True) -> str:
+        """将本地时间转换为UTC时间字符串（用于滴答清单API）
+
+        Args:
+            local_datetime: 本地时间的datetime对象（需要带时区信息）
+            format_iso: 是否使用ISO格式，默认True
+
+        Returns:
+            UTC时间字符串，格式：
+            - ISO: "2025-11-13T07:00:00+0000"（滴答API格式）
+
+        Example:
+            >>> from datetime import datetime
+            >>> from zoneinfo import ZoneInfo
+            >>> local_dt = datetime(2025, 11, 13, 15, 0, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+            >>> TimeUtils.local_to_utc_str(local_dt)
+            "2025-11-13T07:00:00+0000"
+        """
+        from zoneinfo import ZoneInfo
+
+        # 如果没有时区信息，假设是本地时区
+        if local_datetime.tzinfo is None:
+            # 获取系统本地时区（通常是Asia/Shanghai）
+            local_datetime = local_datetime.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+
+        # 转换为UTC
+        utc_datetime = local_datetime.astimezone(ZoneInfo("UTC"))
+
+        if format_iso:
+            # 格式化为滴答清单API格式
+            return utc_datetime.strftime("%Y-%m-%dT%H:%M:%S+0000")
+        else:
+            return utc_datetime.isoformat()
+
 
 # 测试函数
 if __name__ == "__main__":

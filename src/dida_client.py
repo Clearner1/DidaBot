@@ -238,8 +238,12 @@ class DidaClient:
                 task_data["reminders"] = task.reminders
             if task.repeat_flag:
                 task_data["repeatFlag"] = task.repeat_flag
+            if task.sort_order is not None:
+                task_data["sortOrder"] = task.sort_order
             if task.time_zone:
                 task_data["timeZone"] = task.time_zone
+            if task.items:
+                task_data["items"] = task.items
 
             response = await self.client.post("/open/v1/task", json=task_data)
             response.raise_for_status()
@@ -297,8 +301,16 @@ class DidaClient:
                 task_data["priority"] = task.priority
             if task.status:
                 task_data["status"] = task.status
+            if task.reminders:
+                task_data["reminders"] = task.reminders
+            if task.repeat_flag:
+                task_data["repeatFlag"] = task.repeat_flag
+            if task.sort_order is not None:
+                task_data["sortOrder"] = task.sort_order
             if task.time_zone:
                 task_data["timeZone"] = task.time_zone
+            if task.items:
+                task_data["items"] = task.items
 
             response = await self.client.post(f"/open/v1/task/{task.id}", json=task_data)
             response.raise_for_status()
