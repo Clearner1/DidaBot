@@ -17,6 +17,8 @@ import logging
 from typing import List, Optional, Dict, Any
 from datetime import datetime, date
 
+from utils.time_utils import TimeUtils
+
 import kosong
 from kosong.message import Message
 from kosong.tooling.simple import SimpleToolset
@@ -30,6 +32,7 @@ from dida_client import DidaClient
 from tools.dida_tools import (
     GetProjectsTool,
     GetTasksTool,
+    GetTaskDetailTool,
     CompleteTaskTool,
 )
 
@@ -76,6 +79,7 @@ class AIAssistant:
         if dida_client:
             self.toolset += GetProjectsTool(dida_client)
             self.toolset += GetTasksTool(dida_client)
+            self.toolset += GetTaskDetailTool(dida_client)
             self.toolset += CompleteTaskTool(dida_client)
 
         # 系统提示词
@@ -233,8 +237,8 @@ class AIAssistant:
                         # 处理获取任务
                         elif isinstance(actual_output, list) and tool_call_name == "get_tasks":
                             if actual_output:
-                                # 筛选今日任务
-                                today_tasks = [task for task in actual_output if self._is_today_task(task)]
+                                # 筛选今日任务（使用 TimeUtils）
+                                today_tasks = [task for task in actual_output if TimeUtils.is_today_task(task)]
 
                                 if today_tasks:
                                     response_parts.append("今日任务:")
@@ -308,7 +312,55 @@ class AIAssistant:
                         # 处理ToolError
                         elif error_msg:
                             response_parts.append(f"工具执行失败: {error_msg}")
-                            messages.append(Message(role="tool", content=str(error_msg)))
+                            messages.append(Message(
+                                role="tool",
+                                content=str(error_msg),
+                                tool_call_id=tool_result.tool_call_id
+                            ))
+
+                        # 处理获取任务详情
+                        elif isinstance(actual_output, dict) and tool_call_name == "get_task_detail":
+                            if "error" not in actual_output:
+                                # 显示任务详细信息
+                                title = actual_output.get('title', '无标题')
+                                content = actual_output.get('content', '')
+                                desc = actual_output.get('desc', '')
+
+                                response_parts.append(f"任务详情:")
+                                response_parts.append(f"  标题: {title}")
+
+                                if content:
+                                    response_parts.append(f"  内容: {content}")
+                                if desc:
+                                    response_parts.append(f"  描述: {desc}")
+
+                                due_date = actual_output.get('due_date')
+                                if due_date:
+                                    # 使用 TimeUtils 转换为本地时间显示
+                                    local_due_date = TimeUtils.format_due_date(due_date, style='chinese')
+                                    response_parts.append(f"  截止: {local_due_date}")
+
+                                reminders = actual_output.get('reminders', [])
+                                if reminders:
+                                    response_parts.append(f"  提醒: {reminders}")
+
+                                items = actual_output.get('items', [])
+                                if items:
+                                    response_parts.append(f"  子任务: {len(items)}个")
+                                    for item in items:
+                                        item_title = item.get('title', '无标题')
+                                        response_parts.append(f"    - {item_title}")
+                            else:
+                                response_parts.append(f"获取任务详情失败: {actual_output['error']}")
+
+                            # 将工具结果加入历史（转换为JSON字符串，必须包含tool_call_id）
+                            import json
+                            tool_result_str = json.dumps(actual_output, ensure_ascii=False, indent=2)
+                            messages.append(Message(
+                                role="tool",
+                                content=tool_result_str,
+                                tool_call_id=tool_result.tool_call_id
+                            ))
 
                     # 添加AI的自然语言回复
                     if result.message.content:

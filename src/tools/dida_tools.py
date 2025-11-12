@@ -22,6 +22,14 @@ class GetTasksParams(BaseModel):
     """项目ID，如果不提供则获取所有项目的任务"""
 
 
+class GetTaskDetailParams(BaseModel):
+    """获取任务详情参数"""
+    project_id: str
+    """项目ID"""
+    task_id: str
+    """任务ID"""
+
+
 class CompleteTaskParams(BaseModel):
     """完成任务参数"""
     project_id: str
@@ -112,4 +120,23 @@ class CompleteTaskTool(CallableTool2[CompleteTaskParams]):
                 return ToolOk(output={"success": False, "message": "完成任务失败"})
         except Exception as e:
             return ToolOk(output={"error": f"完成任务失败: {str(e)}"})
+
+
+class GetTaskDetailTool(CallableTool2[GetTaskDetailParams]):
+    """获取任务详细信息"""
+
+    name: str = "get_task_detail"
+    description: str = "获取滴答清单中特定任务的完整详细信息，包括任务内容、描述、提醒、子任务等所有字段"
+    params: type[GetTaskDetailParams] = GetTaskDetailParams
+
+    def __init__(self, dida_client: DidaClient):
+        super().__init__()
+        object.__setattr__(self, 'dida_client', dida_client)
+
+    async def __call__(self, params: GetTaskDetailParams) -> ToolReturnType:
+        try:
+            task = await self.dida_client.get_task(params.project_id, params.task_id)
+            return ToolOk(output=task.model_dump())
+        except Exception as e:
+            return ToolOk(output={"error": f"获取任务详情失败: {str(e)}"})
 
