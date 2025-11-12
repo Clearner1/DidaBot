@@ -244,6 +244,15 @@ class DidaBot:
             # 调用AI助手处理消息，传递对话历史
             from kosong.message import Message
             history = context.user_data['conversation_history']
+
+            # 显示typing状态
+            await update.message.chat.send_action("typing")
+
+            # 记录用户输入和开始处理
+            logger.info(f"[用户输入] {user_message}")
+            logger.info(f"[开始处理] 正在调用AI助手...")
+
+            # 调用AI助手处理消息
             response = await self.ai_assistant.chat(user_message, history=history)
 
             # 停止typing状态
@@ -288,9 +297,21 @@ class DidaBot:
             # 调用AI助手处理消息（使用累积的对话历史）
             from kosong.message import Message
             history = context.user_data['conversation_history']
+
+            # 显示typing状态
+            await update.message.chat.send_action("typing")
+
+            # 记录用户输入和开始处理
+            logger.info(f"[用户输入] {user_message}")
+            logger.info(f"[继续对话] 正在调用AI助手...")
+
+            # 调用AI助手处理消息
             response = await self.ai_assistant.chat(user_message, history=history)
 
-            # 发送回复
+            # 停止typing状态
+            await update.message.chat.send_action("cancel")
+
+            # 发送回复（自动分页）
             await self._send_long_message(update, response)
 
             # 处理完成后保持ACTIVE状态，继续等待下一条消息
@@ -298,6 +319,7 @@ class DidaBot:
 
         except Exception as e:
             logger.error(f"AI对话出错: {e}")
+            await update.message.chat.send_action("cancel")  # 停止typing
             await update.message.reply_text(f"对话处理失败: {str(e)}")
             # 出错时结束对话
             context.user_data.clear()
@@ -328,13 +350,15 @@ class DidaBot:
         return ConversationHandler.END
 
     async def _send_long_message(self, update: Update, message: str):
-        """发送长消息（自动分页）"""
+        """发送长消息（自动分页，带节奏控制）"""
         if len(message) > 4000:
             chunks = [message[i:i+3800] for i in range(0, len(message), 3800)]
             for i, chunk in enumerate(chunks):
                 if i == 0:
                     await update.message.reply_text(f"第 {i+1}/{len(chunks)} 部分:\n\n{chunk}")
                 else:
+                    # 添加小延迟避免Telegram速率限制
+                    await asyncio.sleep(0.5)
                     await update.message.reply_text(f"第 {i+1}/{len(chunks)} 部分:\n\n{chunk}")
         else:
             await update.message.reply_text(message)

@@ -62,6 +62,9 @@ class AIAssistant:
         self.dida_client = dida_client
         self.max_iterations = max_iterations  # 最多循环次数，避免无限循环
 
+        # 追踪未处理的工具调用（轻量级状态追踪）
+        self.pending_tool_calls = {}
+
         # 使用Anthropic(GLM)
         if anthropic_api_key:
             self.chat_provider = Anthropic(
@@ -180,10 +183,25 @@ class AIAssistant:
                     messages = []
             messages.append(Message(role="user", content=user_message))
 
+            # 重置未处理工具调用追踪
+            self.pending_tool_calls.clear()
+
             # 多轮循环调用：AI可以连续使用多个工具
             final_response = ""
-            for iteration in range(self.max_iterations):
-                logger.info(f"开始第 {iteration + 1} 轮工具调用")
+            iteration = 0
+            while iteration < self.max_iterations:
+                # 检查是否应该继续（第一轮或还有未处理工具）
+                if iteration > 0 and not self.pending_tool_calls:
+                    logger.info(f"[状态检查] 没有未处理工具，准备退出")
+                    break
+
+                logger.info(f"\n{'='*60}")
+                logger.info(f"[工具调用] 第 {iteration + 1} 轮开始")
+                logger.info(f"  待处理工具: {len(self.pending_tool_calls)} 个")
+                if self.pending_tool_calls:
+                    tool_names = [t.function.name for t in self.pending_tool_calls.values()]
+                    logger.info(f"  工具列表: {tool_names}")
+                logger.info(f"{'='*60}")
 
                 # 调用kosong.step，让AI决定使用什么工具
                 result: StepResult = await kosong.step(
@@ -196,6 +214,22 @@ class AIAssistant:
                 # 将AI的回复加入历史
                 messages.append(result.message)
 
+                # 记录工具调用信息
+                if result.message.tool_calls:
+                    logger.info(f"[AI决策] 将调用 {len(result.message.tool_calls)} 个工具:")
+                    for i, tool_call in enumerate(result.message.tool_calls, 1):
+                        logger.info(f"  {i}. {tool_call.function.name}")
+                        # 记录参数（简化显示）
+                        if hasattr(tool_call.function, 'arguments') and tool_call.function.arguments:
+                            args_str = str(tool_call.function.arguments)[:200]
+                            logger.info(f"     参数: {args_str}...")
+
+                        # 添加到待处理工具列表
+                        self.pending_tool_calls[tool_call.id] = tool_call
+                        logger.info(f"  [追踪] 工具 {tool_call.function.name} 已加入待处理列表")
+                else:
+                    logger.info(f"[AI决策] 无工具调用，将直接回复")
+
                 # 获取工具调用结果（如果有）
                 tool_results = await result.tool_results()
 
@@ -204,18 +238,43 @@ class AIAssistant:
 
                 # 如果有工具调用结果，先处理结果
                 if tool_results:
-                    for tool_result in tool_results:
+                    logger.info(f"[工具结果] 收到 {len(tool_results)} 个工具结果:")
+                    for i, tool_result in enumerate(tool_results, 1):
+                        # 从待处理列表中移除已完成的工具
+                        tool_call_id = tool_result.tool_call_id
+                        if tool_call_id in self.pending_tool_calls:
+                            tool_call = self.pending_tool_calls[tool_call_id]
+                            tool_call_name = tool_call.function.name
+                            del self.pending_tool_calls[tool_call_id]
+                            logger.info(f"  [追踪] 工具 {tool_call_name} 已完成并从待处理列表移除")
+
                         # 从ToolOk/ToolError中提取实际结果
                         actual_output = tool_result.result.output if hasattr(tool_result.result, 'output') else tool_result.result
                         error_msg = getattr(tool_result.result, 'message', None)
 
-                        # 获取工具调用的名称（需要从原始消息中查找）
-                        tool_call_name = None
-                        if result.message and result.message.tool_calls:
-                            for tc in result.message.tool_calls:
-                                if tc.id == tool_result.tool_call_id:
-                                    tool_call_name = tc.function.name
-                                    break
+                        # 显示工具名称
+                        if not tool_call_name:
+                            # 从原始消息中查找（备用方案）
+                            if result.message and result.message.tool_calls:
+                                for tc in result.message.tool_calls:
+                                    if tc.id == tool_result.tool_call_id:
+                                        tool_call_name = tc.function.name
+                                        break
+
+                        # 记录结果摘要（构建完整字符串避免换行）
+                        if isinstance(actual_output, list):
+                            result_summary = f"返回列表，包含 {len(actual_output)} 项"
+                        elif isinstance(actual_output, dict):
+                            if 'error' in actual_output:
+                                result_summary = f"错误: {actual_output['error']}"
+                            else:
+                                result_summary = f"返回字典，包含 {len(actual_output)} 个字段"
+                        elif error_msg:
+                            result_summary = f"错误: {error_msg}"
+                        else:
+                            result_summary = f"返回: {str(actual_output)[:100]}..."
+
+                        logger.info(f"  {i}. {tool_call_name}: {result_summary}")
 
                         # 处理获取项目
                         if isinstance(actual_output, list) and tool_call_name == "get_projects":
@@ -384,11 +443,18 @@ class AIAssistant:
                     # 组合中间回复
                     final_response = "\n\n".join(response_parts)
 
-                    # 继续下一轮循环（可能有更多工具调用）
-                    logger.info(f"第 {iteration + 1} 轮工具调用完成，继续下一轮")
+                # 递增迭代计数器（确保所有路径都增加）
+                iteration += 1
+                # 继续下一轮（如果有工具调用需要处理）
+                if tool_results:
                     continue
 
-            # 如果没有工具调用（最后一步），或者循环结束
+            # 循环结束检查未处理工具状态
+            if self.pending_tool_calls:
+                logger.warning(f"[警告] 循环结束但仍有 {len(self.pending_tool_calls)} 个未处理工具:")
+                for tool_id, tool_call in self.pending_tool_calls.items():
+                    logger.warning(f"  - {tool_call.function.name} ({tool_id})")
+
             # 添加AI的自然语言回复
             if result.message.content and not final_response:
                 if isinstance(result.message.content, str):
@@ -404,7 +470,11 @@ class AIAssistant:
                 if ai_reply and ai_reply.strip():
                     final_response = ai_reply.strip()
 
-            logger.info(f"AI回复: {final_response[:200]}...")
+            # 记录最终AI回复
+            logger.info(f"\n{'='*60}")
+            logger.info(f"[AI最终回复] 长度: {len(final_response)} 字符")
+            logger.info(f"内容预览: {final_response[:200]}...")
+            logger.info(f"{'='*60}\n")
             return final_response
 
         except Exception as e:
