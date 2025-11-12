@@ -173,7 +173,11 @@ class AIAssistant:
             if context:
                 messages = context.history
             else:
-                messages = history or []
+                # 确保始终使用传入的history列表，即使它是空列表
+                if history is not None:
+                    messages = history
+                else:
+                    messages = []
             messages.append(Message(role="user", content=user_message))
 
             # 多轮循环调用：AI可以连续使用多个工具

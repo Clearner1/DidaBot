@@ -6,8 +6,16 @@ Telegram Bot 主入口
 
 import asyncio
 import logging
+from datetime import datetime
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+    ConversationHandler,
+)
 from telegram.error import TelegramError
 
 from config import get_config
@@ -30,6 +38,12 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# 对话状态常量
+(IDLE, ACTIVE) = range(2)
+
+# 对话超时时间（秒）
+CONVERSATION_TIMEOUT = 300  # 5分钟
 
 
 class DidaBot:
@@ -113,15 +127,41 @@ class DidaBot:
         self.application.add_handler(CommandHandler("completetask", self.task_handlers.cmd_completetask))
         self.application.add_handler(CommandHandler("deletetask", self.task_handlers.cmd_deletetask))
 
-        # AI对话处理器（处理普通文本消息）
+        # AI对话处理器（使用ConversationHandler实现上下文窗口）
         if self.ai_assistant:
-            self.application.add_handler(
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    self._handle_ai_message
-                )
+            # 创建ConversationHandler用于AI对话
+            ai_conversation_handler = ConversationHandler(
+                entry_points=[
+                    MessageHandler(
+                        filters.TEXT & ~filters.COMMAND,
+                        self._handle_ai_start
+                    )
+                ],
+                states={
+                    IDLE: [
+                        MessageHandler(
+                            filters.TEXT & ~filters.COMMAND,
+                            self._handle_ai_start
+                        )
+                    ],
+                    ACTIVE: [
+                        MessageHandler(
+                            filters.TEXT & ~filters.COMMAND,
+                            self._handle_ai_active
+                        ),
+                        CommandHandler("cancel", self._handle_ai_cancel)
+                    ],
+                },
+                fallbacks=[
+                    CommandHandler("cancel", self._handle_ai_cancel),
+                    CommandHandler("stop", self._handle_ai_cancel),
+                ],
+                conversation_timeout=CONVERSATION_TIMEOUT,
+                per_user=True,
+                allow_reentry=True
             )
-            logger.info("AI对话处理器已注册")
+            self.application.add_handler(ai_conversation_handler)
+            logger.info("AI对话处理器（ConversationHandler）已注册")
 
         logger.info("命令处理器注册完成")
 
@@ -166,11 +206,11 @@ class DidaBot:
         help_message = format_help_message()
         await update.message.reply_text(help_message)
 
-    async def _handle_ai_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """处理AI对话消息"""
+    async def _handle_ai_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """处理AI对话启动（IDLE状态）"""
         # 验证用户权限
         if not await self._check_permission(update):
-            return
+            return ConversationHandler.END
 
         # 检查AI助手是否可用
         if not self.ai_assistant:
@@ -181,32 +221,123 @@ class DidaBot:
                 "• /addtask - 添加任务\n"
                 "• /help - 查看所有命令"
             )
-            return
+            return ConversationHandler.END
 
+        # 获取用户消息
         user_message = update.message.text
-        logger.info(f"AI对话请求: {user_message[:100]}...")
+        logger.info(f"AI对话开始: {user_message[:100]}...")
+
+        # 初始化对话历史（如果不存在）
+        if 'conversation_history' not in context.user_data:
+            context.user_data['conversation_history'] = []
+
+        # 更新用户数据中的活动时间
+        context.user_data['last_activity'] = datetime.now()
+
+        # 设置状态为ACTIVE
+        context.user_data['state'] = ACTIVE
 
         # 显示正在输入状态
         await update.message.chat.send_action("typing")
 
         try:
-            # 调用AI助手处理消息
-            response = await self.ai_assistant.chat(user_message)
+            # 调用AI助手处理消息，传递对话历史
+            from kosong.message import Message
+            history = context.user_data['conversation_history']
+            response = await self.ai_assistant.chat(user_message, history=history)
 
-            # 如果响应太长，分页发送
-            if len(response) > 4000:
-                chunks = [response[i:i+3800] for i in range(0, len(response), 3800)]
-                for i, chunk in enumerate(chunks):
-                    if i == 0:
-                        await update.message.reply_text(f"第 {i+1}/{len(chunks)} 部分:\n\n{chunk}")
-                    else:
-                        await update.message.reply_text(f"第 {i+1}/{len(chunks)} 部分:\n\n{chunk}")
-            else:
-                await update.message.reply_text(response)
+            # 停止typing状态
+            await update.message.chat.send_action("cancel")
+
+            # 发送回复（自动分页）
+            await self._send_long_message(update, response)
+
+            # 处理完成后保持ACTIVE状态，继续等待下一条消息
+            return ACTIVE
+
+        except Exception as e:
+            logger.error(f"AI对话出错: {e}")
+            await update.message.chat.send_action("cancel")  # 停止typing
+            await update.message.reply_text(f"对话处理失败: {str(e)}")
+            # 出错时结束对话
+            context.user_data.clear()
+            return ConversationHandler.END
+
+    async def _handle_ai_active(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """处理AI对话继续（ACTIVE状态）"""
+        # 验证用户权限
+        if not await self._check_permission(update):
+            return ConversationHandler.END
+
+        # 获取用户消息
+        user_message = update.message.text
+
+        # 检查是否是取消命令（应该在fallback中处理，但这里也做检查）
+        if user_message.lower() in ['/cancel', '/stop', '取消', '结束']:
+            return await self._handle_ai_cancel(update, context)
+
+        logger.info(f"AI对话继续: {user_message[:100]}...")
+
+        # 更新用户数据中的活动时间
+        context.user_data['last_activity'] = datetime.now()
+
+        # 显示正在输入状态
+        await update.message.chat.send_action("typing")
+
+        try:
+            # 调用AI助手处理消息（使用累积的对话历史）
+            from kosong.message import Message
+            history = context.user_data['conversation_history']
+            response = await self.ai_assistant.chat(user_message, history=history)
+
+            # 发送回复
+            await self._send_long_message(update, response)
+
+            # 处理完成后保持ACTIVE状态，继续等待下一条消息
+            return ACTIVE
 
         except Exception as e:
             logger.error(f"AI对话出错: {e}")
             await update.message.reply_text(f"对话处理失败: {str(e)}")
+            # 出错时结束对话
+            context.user_data.clear()
+            return ConversationHandler.END
+
+    async def _handle_ai_cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """处理AI对话取消"""
+        # 清理用户数据
+        context.user_data.clear()
+
+        # 发送结束消息
+        await update.message.reply_text("对话已结束。如需继续，请直接发送新消息。")
+
+        # 返回ConversationHandler.END
+        return ConversationHandler.END
+
+    async def _handle_ai_timeout(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """处理AI对话超时"""
+        # 清理用户数据
+        context.user_data.clear()
+
+        # 发送超时消息
+        if update.effective_message:
+            await update.effective_message.reply_text(
+                "对话已超时（5分钟无活动）。如需继续，请直接发送新消息。"
+            )
+
+        return ConversationHandler.END
+
+    async def _send_long_message(self, update: Update, message: str):
+        """发送长消息（自动分页）"""
+        if len(message) > 4000:
+            chunks = [message[i:i+3800] for i in range(0, len(message), 3800)]
+            for i, chunk in enumerate(chunks):
+                if i == 0:
+                    await update.message.reply_text(f"第 {i+1}/{len(chunks)} 部分:\n\n{chunk}")
+                else:
+                    await update.message.reply_text(f"第 {i+1}/{len(chunks)} 部分:\n\n{chunk}")
+        else:
+            await update.message.reply_text(message)
 
     async def _check_permission(self, update: Update) -> bool:
         """检查用户权限"""
