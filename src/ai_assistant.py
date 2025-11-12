@@ -24,6 +24,7 @@ from kosong import StepResult
 
 # 修复导入路径
 from kosong.contrib.chat_provider.anthropic import Anthropic
+from kosong.contrib.context.linear import LinearContext
 
 from dida_client import DidaClient
 from tools.dida_tools import (
@@ -45,6 +46,7 @@ class AIAssistant:
         anthropic_base_url: str = "https://api.anthropic.com",
         anthropic_model: str = "claude-3-5-sonnet-20241022",
         dida_client: Optional[DidaClient] = None,
+        max_iterations: int = 5,
     ):
         """初始化AI助手
 
@@ -55,6 +57,7 @@ class AIAssistant:
             dida_client: 滴答清单客户端实例
         """
         self.dida_client = dida_client
+        self.max_iterations = max_iterations  # 最多循环次数，避免无限循环
 
         # 使用Anthropic(GLM)
         if anthropic_api_key:
@@ -145,116 +148,193 @@ class AIAssistant:
             logger.warning(f"判断任务日期失败: {e}, task={task}")
             return False
 
-    async def chat(self, user_message: str, history: Optional[List[Message]] = None) -> str:
+    async def chat(
+        self,
+        user_message: str,
+        context: Optional[LinearContext] = None,
+        history: Optional[List[Message]] = None,
+    ) -> str:
         """与用户对话，处理自然语言请求
 
         Args:
             user_message: 用户输入的消息
-            history: 对话历史
+            context: 可选的对话上下文，用于保持多轮对话历史
+            history: 对话历史（仅当没有context时使用）
 
         Returns:
             AI的回复
         """
         try:
             # 准备历史消息
-            messages = history or []
+            if context:
+                messages = context.history
+            else:
+                messages = history or []
             messages.append(Message(role="user", content=user_message))
 
-            # 调用kosong.step，让AI决定使用什么工具
-            result: StepResult = await kosong.step(
-                chat_provider=self.chat_provider,
-                system_prompt=self.system_prompt,
-                toolset=self.toolset,
-                history=messages,
-            )
+            # 多轮循环调用：AI可以连续使用多个工具
+            final_response = ""
+            for iteration in range(self.max_iterations):
+                logger.info(f"开始第 {iteration + 1} 轮工具调用")
 
-            # 获取工具调用结果（如果有）
-            tool_results = await result.tool_results()
+                # 调用kosong.step，让AI决定使用什么工具
+                result: StepResult = await kosong.step(
+                    chat_provider=self.chat_provider,
+                    system_prompt=self.system_prompt,
+                    toolset=self.toolset,
+                    history=messages,
+                )
 
-            # 处理不同类型的工具调用结果
-            response_parts = []
+                # 将AI的回复加入历史
+                messages.append(result.message)
 
-            # 1. 如果有工具调用结果，先处理结果
-            for tool_result in tool_results:
-                # 从ToolOk/ToolError中提取实际结果
-                actual_output = tool_result.result.output if hasattr(tool_result.result, 'output') else tool_result.result
-                error_msg = getattr(tool_result.result, 'message', None)
+                # 获取工具调用结果（如果有）
+                tool_results = await result.tool_results()
 
-                # 获取工具调用的名称（需要从原始消息中查找）
-                tool_call_name = None
-                if result.message and result.message.tool_calls:
-                    for tc in result.message.tool_calls:
-                        if tc.id == tool_result.tool_call_id:
-                            tool_call_name = tc.function.name
-                            break
+                # 处理不同类型的工具调用结果
+                response_parts = []
 
-                # 处理获取项目
-                if isinstance(actual_output, list) and tool_call_name == "get_projects":
-                    if actual_output:
-                        response_parts.append("项目列表:")
-                        for project in actual_output:
-                            status = "已关闭" if project.get("closed") else "活跃"
-                            response_parts.append(
-                                f"  • {project.get('name')} (ID: {project.get('id')[:8]}..., {status})"
-                            )
-                    else:
-                        response_parts.append("没有找到项目")
+                # 如果有工具调用结果，先处理结果
+                if tool_results:
+                    for tool_result in tool_results:
+                        # 从ToolOk/ToolError中提取实际结果
+                        actual_output = tool_result.result.output if hasattr(tool_result.result, 'output') else tool_result.result
+                        error_msg = getattr(tool_result.result, 'message', None)
 
-                # 处理获取任务
-                elif isinstance(actual_output, list) and tool_call_name == "get_tasks":
-                    if actual_output:
-                        # 筛选今日任务
-                        today_tasks = [task for task in actual_output if self._is_today_task(task)]
+                        # 获取工具调用的名称（需要从原始消息中查找）
+                        tool_call_name = None
+                        if result.message and result.message.tool_calls:
+                            for tc in result.message.tool_calls:
+                                if tc.id == tool_result.tool_call_id:
+                                    tool_call_name = tc.function.name
+                                    break
 
-                        if today_tasks:
-                            response_parts.append("今日任务:")
+                        # 处理获取项目
+                        if isinstance(actual_output, list) and tool_call_name == "get_projects":
+                            if actual_output:
+                                response_parts.append("项目列表:")
+                                for project in actual_output:
+                                    status = "已关闭" if project.get("closed") else "活跃"
+                                    response_parts.append(
+                                        f"  • {project.get('name')} (ID: {project.get('id')[:8]}..., {status})"
+                                    )
+                            else:
+                                response_parts.append("没有找到项目")
 
-                            # 按项目分组
-                            tasks_by_project = {}
-                            for task in today_tasks:
-                                project_id = task.get("project_id", "unknown")
-                                if project_id not in tasks_by_project:
-                                    tasks_by_project[project_id] = []
-                                tasks_by_project[project_id].append(task)
+                            # 将工具结果加入历史（转换为JSON字符串，必须包含tool_call_id）
+                            import json
+                            tool_result_str = json.dumps(actual_output, ensure_ascii=False, indent=2)
+                            messages.append(Message(
+                                role="tool",
+                                content=tool_result_str,
+                                tool_call_id=tool_result.tool_call_id
+                            ))
 
-                            # 获取项目信息用于显示名称
-                            try:
-                                projects = await self.dida_client.get_projects()
-                                project_map = {p.id: p.name for p in projects}
-                            except:
-                                project_map = {}
+                        # 处理获取任务
+                        elif isinstance(actual_output, list) and tool_call_name == "get_tasks":
+                            if actual_output:
+                                # 筛选今日任务
+                                today_tasks = [task for task in actual_output if self._is_today_task(task)]
 
-                            # 显示任务
-                            for project_id, project_tasks in tasks_by_project.items():
-                                project_name = project_map.get(project_id, f"项目 {project_id[:8]}...")
-                                response_parts.append(f"\n项目: {project_name}")
+                                if today_tasks:
+                                    response_parts.append("今日任务:")
 
-                                for task in project_tasks:
-                                    status = "已完成" if task.get("status") == 2 else "进行中"
-                                    title = task.get("title", "无标题")
-                                    response_parts.append(f"  • {title} ({status})")
+                                    # 按项目分组
+                                    tasks_by_project = {}
+                                    for task in today_tasks:
+                                        project_id = task.get("project_id", "unknown")
+                                        if project_id not in tasks_by_project:
+                                            tasks_by_project[project_id] = []
+                                        tasks_by_project[project_id].append(task)
+
+                                    # 获取项目信息用于显示名称
+                                    try:
+                                        projects = await self.dida_client.get_projects()
+                                        project_map = {p.id: p.name for p in projects}
+                                    except:
+                                        project_map = {}
+
+                                    # 显示任务
+                                    for project_id, project_tasks in tasks_by_project.items():
+                                        project_name = project_map.get(project_id, f"项目 {project_id[:8]}...")
+                                        response_parts.append(f"\n项目: {project_name}")
+
+                                        for task in project_tasks:
+                                            status = "已完成" if task.get("status") == 2 else "进行中"
+                                            title = task.get("title", "无标题")
+                                            response_parts.append(f"  • {title} ({status})")
+                                else:
+                                    response_parts.append("今天没有任务 ✨")
+                            else:
+                                response_parts.append("没有找到任务")
+
+                            # 将工具结果加入历史（转换为JSON字符串，必须包含tool_call_id）
+                            import json
+                            tool_result_str = json.dumps(actual_output, ensure_ascii=False, indent=2)
+                            messages.append(Message(
+                                role="tool",
+                                content=tool_result_str,
+                                tool_call_id=tool_result.tool_call_id
+                            ))
+
+                        # 处理完成任务
+                        elif isinstance(actual_output, dict) and tool_call_name == "complete_task":
+                            if actual_output.get("success"):
+                                response_parts.append("任务已完成！✅")
+                            else:
+                                response_parts.append(f"完成任务失败: {actual_output.get('message', '未知错误')}")
+
+                            # 将工具结果加入历史（转换为JSON字符串，必须包含tool_call_id）
+                            import json
+                            tool_result_str = json.dumps(actual_output, ensure_ascii=False, indent=2)
+                            messages.append(Message(
+                                role="tool",
+                                content=tool_result_str,
+                                tool_call_id=tool_result.tool_call_id
+                            ))
+
+                        # 处理错误情况
+                        elif isinstance(actual_output, dict) and "error" in actual_output:
+                            response_parts.append(f"执行失败: {actual_output['error']}")
+                            # 将工具结果加入历史（转换为JSON字符串，必须包含tool_call_id）
+                            import json
+                            tool_result_str = json.dumps(actual_output, ensure_ascii=False, indent=2)
+                            messages.append(Message(
+                                role="tool",
+                                content=tool_result_str,
+                                tool_call_id=tool_result.tool_call_id
+                            ))
+
+                        # 处理ToolError
+                        elif error_msg:
+                            response_parts.append(f"工具执行失败: {error_msg}")
+                            messages.append(Message(role="tool", content=str(error_msg)))
+
+                    # 添加AI的自然语言回复
+                    if result.message.content:
+                        if isinstance(result.message.content, str):
+                            ai_reply = result.message.content
                         else:
-                            response_parts.append("今天没有任务 ✨")
-                    else:
-                        response_parts.append("没有找到任务")
+                            # 处理内容列表
+                            ai_reply = "\n".join(
+                                part.text if hasattr(part, "text") else str(part)
+                                for part in result.message.content
+                                if hasattr(part, "text")
+                            )
 
-                # 处理完成任务
-                elif isinstance(actual_output, dict) and tool_call_name == "complete_task":
-                    if actual_output.get("success"):
-                        response_parts.append("任务已完成！✅")
-                    else:
-                        response_parts.append(f"完成任务失败: {actual_output.get('message', '未知错误')}")
+                        if ai_reply and ai_reply.strip():
+                            response_parts.insert(0, ai_reply.strip())
 
-                # 处理错误情况
-                elif isinstance(actual_output, dict) and "error" in actual_output:
-                    response_parts.append(f"执行失败: {actual_output['error']}")
+                    # 组合中间回复
+                    final_response = "\n\n".join(response_parts)
 
-                # 处理ToolError
-                elif error_msg:
-                    response_parts.append(f"工具执行失败: {error_msg}")
+                    # 继续下一轮循环（可能有更多工具调用）
+                    logger.info(f"第 {iteration + 1} 轮工具调用完成，继续下一轮")
+                    continue
 
-            # 2. 添加AI的自然语言回复
-            if result.message.content:
+            # 如果没有工具调用（最后一步），或者循环结束
+            # 添加AI的自然语言回复
+            if result.message.content and not final_response:
                 if isinstance(result.message.content, str):
                     ai_reply = result.message.content
                 else:
@@ -266,10 +346,7 @@ class AIAssistant:
                     )
 
                 if ai_reply and ai_reply.strip():
-                    response_parts.insert(0, ai_reply.strip())
-
-            # 组合最终回复
-            final_response = "\n\n".join(response_parts)
+                    final_response = ai_reply.strip()
 
             logger.info(f"AI回复: {final_response[:200]}...")
             return final_response
