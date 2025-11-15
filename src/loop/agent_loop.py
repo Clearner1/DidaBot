@@ -96,21 +96,22 @@ class AgentLoop:
         logger.info(f"\n{'='*60}")
         logger.info(f"AgentLoop执行一轮调用（剩余{self.max_iterations}次）")
         logger.info(f"未处理工具数: {len(unprocessed_tools)}")
+        logger.info(f"消息历史长度: {len(messages)}")
         logger.info(f"{'='*60}")
 
+        # 记录传递给kosong.step的消息（调试用）
+        logger.debug(f"传递给kosong.step的消息:")
+        for i, msg in enumerate(messages[-3:], 1):  # 只记录最近3条
+            logger.debug(f"  {i}. role={msg.role}, content_len={len(str(msg.content)) if msg.content else 0}")
+
         # 调用kosong.step，让AI决定使用什么工具
+        # 传递完整的消息历史给AI（保持上下文完整）
         result: StepResult = await kosong.step(
             chat_provider=self.chat_provider,
             system_prompt=system_prompt,
             toolset=self.toolset,
             history=messages,
         )
-
-        # 添加AI消息到context
-        ai_content = result.message.content
-        if ai_content is None:
-            ai_content = ""
-        self._add_ai_message_to_context(context, ai_content, result.message.tool_calls)
 
         # 提取AI的自然语言回复
         response_text = ""
@@ -154,12 +155,8 @@ class AgentLoop:
             if tool_results:
                 logger.info(f"[工具结果] 收到 {len(tool_results)} 个结果")
 
-                for tool_result in tool_results:
-                    # 获取工具执行结果
-                    output = tool_result.result.output if hasattr(tool_result.result, 'output') else tool_result.result
-
-                    # 将结果添加到context
-                    context.add_tool_result(tool_result.tool_call_id, output)
+                # 注意：不将原始工具结果添加到context（避免大数据导致API错误）
+                # 由AIAssistant在_process_tool_results()中处理并决定是否添加摘要
 
             # 这一轮有工具调用，actor=agent（继续下一轮）
             actor = "agent"
@@ -168,6 +165,12 @@ class AgentLoop:
             # 没有工具调用，这一轮可以结束
             logger.info("[AI决策] 无工具调用，本轮结束")
             actor = "user"
+
+        # 在返回前添加AI消息到context（避免过早添加导致格式问题）
+        ai_content = result.message.content
+        if ai_content is None:
+            ai_content = ""
+        self._add_ai_message_to_context(context, ai_content, result.message.tool_calls)
 
         return actor, response_text, tool_results
 

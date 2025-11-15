@@ -353,18 +353,20 @@ class AIAssistant:
             if failed_count > 0:
                 response_parts.append(f"有 {failed_count} 个任务创建失败")
 
-            # 批量操作时，不加入详细工具结果到历史，避免历史过长
-            # 只加入一个摘要消息
-            if created_tasks:
-                summary = {
-                    "batch_create_task": True,
-                    "total": len(created_tasks) + failed_count,
-                    "success": len(created_tasks),
-                    "task_names": created_tasks,
-                    "failed": failed_count
-                }
-                # 使用第一个tool_call_id加入摘要
-                self.context.add_tool_result(tool_results[0].tool_call_id, summary)
+            # 批量操作时，也将工具结果添加到历史（模仿原版本）
+            # 不同于之前，现在批量创建也需要完整记录到messages中
+            import json
+            from kosong.message import Message
+
+            # 为每个创建任务结果创建Message
+            for tool_result in tool_results:
+                actual_output = tool_result.result.output if hasattr(tool_result.result, 'output') else tool_result.result
+                tool_result_str = json.dumps(actual_output, ensure_ascii=False, indent=2)
+                self.context.messages.append(Message(
+                    role="tool",
+                    content=tool_result_str,
+                    tool_call_id=tool_result.tool_call_id
+                ))
 
         # 非批量操作，按原逻辑处理
         else:
@@ -413,8 +415,17 @@ class AIAssistant:
                     if formatted:
                         response_parts.append(formatted)
 
-                # 将工具结果添加到上下文历史
-                self.context.add_tool_result(tool_result.tool_call_id, actual_output)
+                # 将工具结果添加到上下文历史（模仿原版本：转换为Message对象）
+                # 这是关键：需要将工具结果作为Message对象添加到context，而不是普通字典
+                import json
+                tool_result_str = json.dumps(actual_output, ensure_ascii=False, indent=2)
+                from kosong.message import Message
+                self.context.messages.append(Message(
+                    role="tool",
+                    content=tool_result_str,
+                    tool_call_id=tool_result.tool_call_id
+                ))
+                logger.debug(f"工具 {tool_call_name} 结果已添加到messages历史")
 
         return "\n\n".join(response_parts) if response_parts else None
 
