@@ -115,6 +115,7 @@ tg-dida
 ```
 
 启动成功后，你会在控制台看到：
+
 ```
 🤖 滴答清单 Bot 正在启动...
 Bot 初始化成功
@@ -198,12 +199,14 @@ Bot 会返回格式化的任务信息：
 ### 已完成（✅）
 
 1. **项目初始化**
+   
    - ✅ 项目目录结构创建
    - ✅ 配置文件（`config.py`）
    - ✅ 环境模板（`.env.example`）
    - ✅ 项目依赖（`requirements.txt`, `pyproject.toml`）
 
 2. **DidaClient API 客户端**
+   
    - ✅ `Task` 和 `Project` 数据模型
    - ✅ 获取所有项目列表（`get_projects()`）
    - ✅ 获取单个项目（`get_project()`）
@@ -215,17 +218,20 @@ Bot 会返回格式化的任务信息：
    - ✅ 删除任务（`delete_task()`）
 
 3. **Telegram Bot 框架**
+   
    - ✅ Bot 主入口（`bot.py`）
    - ✅ 启动脚本（`main.py`）
    - ✅ 基础命令（`/start`, `/help`）
    - ✅ 权限控制（仅管理员可使用）
 
 4. **命令处理器**
+   
    - ✅ 任务命令处理器（`task_handlers.py`）
    - ✅ 项目命令处理器（`project_handlers.py`）
    - ✅ 完整的错误处理和用户反馈
 
 5. **工具函数**
+   
    - ✅ 消息格式化工具（`formatter.py`）
    - ✅ MarkdownV2 格式支持
    - ✅ 长消息分页处理
@@ -304,6 +310,7 @@ class Project(BaseModel):
 ### Claude 负责部分
 
 已由 Claude 实现：
+
 - 项目结构和基础配置
 - `DidaClient` 核心框架
 - 获取任务和项目列表功能
@@ -311,6 +318,7 @@ class Project(BaseModel):
 ### GLM 负责部分
 
 GLM 需要实现：
+
 1. 完成 DidaClient 的剩余方法
 2. 实现 Telegram Bot 框架
 3. 实现所有命令处理器
@@ -320,31 +328,37 @@ GLM 需要实现：
 ### 开发顺序建议
 
 1. **第一阶段（基础功能）**
+   
    - GLM 完成 DidaClient 的所有 CRUD 方法
    - GLM 实现 Telegram Bot 基础框架
    - GLM 实现基本命令处理器
 
 2. **第二阶段（集成测试）**
+   
    - 集成所有模块
    - 编写测试用例
    - 手动测试所有功能
 
 3. **第三阶段（AI功能）**
+   
    - 集成 kosong 框架
    - 实现自然语言处理
 
 ## 注意事项
 
 1. **个人 Token 安全**
+   
    - 不要将 `.env` 文件提交到版本控制
    - 使用强个人 token
    - Bot 仅对 `BOT_ADMIN_USER_ID` 用户响应（安全限制）
 
 2. **API 限制**
+   
    - 滴答清单 API 有调用频率限制
    - 本机器人按需调用，不会频繁请求
 
 3. **错误处理**
+   
    - 已实现基本错误处理
    - 调用失败时会返回错误信息
 
@@ -366,8 +380,9 @@ GLM 需要实现：
 - **GLM**: 负责功能实现、集成测试、Bug修复
 
 **协作方式**：
+
 1. Claude 提供详细设计方案
-2. CLM 根据设计编码实现
+2. GLM 根据设计编码实现
 3. 双方进行代码审查
 4. 共同测试和优化
 

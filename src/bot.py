@@ -43,8 +43,8 @@ logger = logging.getLogger(__name__)
 (IDLE, ACTIVE) = range(2)
 
 # 对话超时时间（秒）
-# 设置为 None 表示不自动超时，支持持续对话
-CONVERSATION_TIMEOUT = None
+# 设置为 300 表示5分钟无对话自动超时，清除对话历史
+CONVERSATION_TIMEOUT = 300
 
 
 class DidaBot:
@@ -88,7 +88,7 @@ class DidaBot:
                     anthropic_base_url=self.config.anthropic_base_url,
                     anthropic_model=self.config.anthropic_model,
                     dida_client=self.dida_client,
-                    max_history_length=15,  # 保留最近15条消息（约7-8轮对话）
+                    max_history_length=None,  # 不限制对话历史长度，保持完整对话
                 )
                 print("AI助手已启用")
             elif AI_AVAILABLE:
@@ -118,6 +118,7 @@ class DidaBot:
         # 基础命令
         self.application.add_handler(CommandHandler("start", self._cmd_start))
         self.application.add_handler(CommandHandler("help", self._cmd_help))
+        self.application.add_handler(CommandHandler("reset", self._cmd_reset))
 
         # 项目命令
         self.application.add_handler(CommandHandler("projects", self.project_handlers.cmd_projects))
@@ -259,11 +260,25 @@ class DidaBot:
             logger.info(f"[用户输入] {user_message}")
             logger.info(f"[开始处理] 正在调用AI助手...")
 
-            # 调用AI助手处理消息
-            response = await self.ai_assistant.chat(user_message, history=history)
+            # 调用AI助手处理消息（传递 Telegram bot 实例用于发送工具调用通知）
+            response = await self.ai_assistant.chat(
+                user_message,
+                history=history,
+                telegram_bot=context.application.bot,
+                telegram_chat_id=update.effective_chat.id
+            )
 
             # 发送回复（自动分页）
             await self._send_long_message(update, response)
+
+            # 将用户消息和AI回复添加到对话历史
+            # 保持对话完整性，不裁剪
+            history.append(Message(role="user", content=user_message))
+            history.append(Message(role="assistant", content=response))
+
+            # 保存回context.user_data（不裁剪，保持完整对话历史）
+            context.user_data['conversation_history'] = history
+            logger.info(f"对话历史已更新，当前共 {len(history)} 条消息")
 
             # 处理完成后保持ACTIVE状态，继续等待下一条消息
             return ACTIVE
@@ -319,11 +334,25 @@ class DidaBot:
             logger.info(f"[用户输入] {user_message}")
             logger.info(f"[继续对话] 正在调用AI助手...")
 
-            # 调用AI助手处理消息
-            response = await self.ai_assistant.chat(user_message, history=history)
+            # 调用AI助手处理消息（传递 Telegram bot 实例用于发送工具调用通知）
+            response = await self.ai_assistant.chat(
+                user_message,
+                history=history,
+                telegram_bot=context.application.bot,
+                telegram_chat_id=update.effective_chat.id
+            )
 
             # 发送回复（自动分页）
             await self._send_long_message(update, response)
+
+            # 将用户消息和AI回复添加到对话历史，实现上下文累积
+            # 保持对话完整性，不裁剪
+            history.append(Message(role="user", content=user_message))
+            history.append(Message(role="assistant", content=response))
+
+            # 保存回context.user_data（不裁剪，保持完整对话历史）
+            context.user_data['conversation_history'] = history
+            logger.info(f"对话历史已更新，当前共 {len(history)} 条消息")
 
             # 处理完成后保持ACTIVE状态，继续等待下一条消息
             return ACTIVE
@@ -359,6 +388,29 @@ class DidaBot:
 
         # 返回ConversationHandler.END
         return ConversationHandler.END
+
+    async def _cmd_reset(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/reset 命令 - 重置AI对话历史"""
+        # 验证用户权限
+        if not await self._check_permission(update):
+            return
+
+        # 检查是否在AI对话状态中
+        current_state = context.user_data.get('state')
+        if current_state not in [IDLE, ACTIVE]:
+            # 没有活跃对话，直接回复
+            await update.message.reply_text("No active AI conversation to reset. Send any message to start a new conversation.")
+            return
+
+        # 清理对话历史
+        context.user_data.clear()
+
+        # 发送确认消息
+        await update.message.reply_text("AI对话历史已重置，让我们开始新的对话吧！")
+
+        # 保持在ACTIVE状态，准备接收新消息
+        context.user_data['state'] = ACTIVE
+        context.user_data['conversation_history'] = []
 
     async def _handle_ai_timeout(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理AI对话超时"""
@@ -407,6 +459,23 @@ class DidaBot:
         try:
             # 初始化应用
             await self.application.initialize()
+
+            # 设置Telegram命令菜单
+            from telegram import BotCommand
+            commands = [
+                BotCommand("start", "启动机器人"),
+                BotCommand("help", "显示帮助信息"),
+                BotCommand("reset", "重置AI对话历史"),
+                BotCommand("projects", "查看所有项目"),
+                BotCommand("addtask", "添加任务"),
+                BotCommand("listtasks", "查看任务列表"),
+                BotCommand("completetask", "完成任务"),
+                BotCommand("deletetask", "删除任务"),
+                BotCommand("project_info", "查看项目详情"),
+            ]
+            await self.application.bot.set_my_commands(commands)
+            logger.info("Telegram命令菜单已设置完成")
+
             await self.application.start()
 
             # 启动轮询
