@@ -274,6 +274,150 @@ class AIAssistant:
             traceback.print_exc()
             return f"抱歉，处理请求时出错: {str(e)}"
 
+    async def _process_tool_results(self, tool_results: list) -> Optional[str]:
+        """
+        处理工具结果（从主循环中提取）
+
+        Args:
+            tool_results: 工具结果列表
+
+        Returns:
+            处理后的回复文本
+        """
+        if not tool_results:
+            return None
+
+        logger.info(f"[工具结果] 收到 {len(tool_results)} 个工具结果:")
+
+        # 检测批量操作：如果有多个相同类型的工具调用，进行摘要化处理
+        tool_names = []
+        for tool_result in tool_results:
+            for msg in self.context.get_messages():
+                if msg.role == "assistant" and hasattr(msg, "tool_calls") and msg.tool_calls:
+                    for tc in msg.tool_calls:
+                        if tc.id == tool_result.tool_call_id:
+                            tool_names.append(tc.function.name)
+                            break
+
+        # 统计每种工具类型的数量
+        from collections import Counter
+        tool_counts = Counter(tool_names)
+        is_batch_operation = any(count > 1 for count in tool_counts.values())
+
+        response_parts = []
+
+        # 批量创建任务摘要处理
+        if is_batch_operation and "create_task" in tool_counts and tool_counts["create_task"] > 1:
+            logger.info("检测到批量创建任务，进行摘要化处理")
+
+            # 收集所有创建任务结果
+            created_tasks = []
+            failed_count = 0
+
+            for i, tool_result in enumerate(tool_results, 1):
+                # 自动推导工具名称
+                tool_call_id = tool_result.tool_call_id
+                tool_call_name = "unknown"
+
+                # 从历史中查找对应的工具调用
+                for msg in self.context.get_messages():
+                    if msg.role == "assistant" and hasattr(msg, "tool_calls") and msg.tool_calls:
+                        for tc in msg.tool_calls:
+                            if tc.id == tool_call_id:
+                                tool_call_name = tc.function.name
+                                break
+
+                # 提取结果
+                actual_output = tool_result.result.output if hasattr(tool_result.result, 'output') else tool_result.result
+
+                if tool_call_name == "create_task":
+                    if isinstance(actual_output, dict) and not actual_output.get("error"):
+                        created_tasks.append(actual_output.get("title", "未知任务"))
+                    else:
+                        failed_count += 1
+
+                # 处理其他工具结果（get_projects, get_current_time）
+                else:
+                    formatter = self.tool_formatters.get(tool_call_name)
+                    if formatter:
+                        if tool_call_name == "get_tasks":
+                            formatted = await formatter(actual_output, self.dida_client)
+                        else:
+                            formatted = await formatter(actual_output)
+                        if formatted:
+                            response_parts.append(formatted)
+
+            # 添加批量创建任务的摘要
+            if created_tasks:
+                response_parts.append(f"批量创建任务完成！已成功创建 {len(created_tasks)} 个任务：{', '.join(created_tasks)}")
+            if failed_count > 0:
+                response_parts.append(f"有 {failed_count} 个任务创建失败")
+
+            # 批量操作时，不加入详细工具结果到历史，避免历史过长
+            # 只加入一个摘要消息
+            if created_tasks:
+                summary = {
+                    "batch_create_task": True,
+                    "total": len(created_tasks) + failed_count,
+                    "success": len(created_tasks),
+                    "task_names": created_tasks,
+                    "failed": failed_count
+                }
+                # 使用第一个tool_call_id加入摘要
+                self.context.add_tool_result(tool_results[0].tool_call_id, summary)
+
+        # 非批量操作，按原逻辑处理
+        else:
+            for i, tool_result in enumerate(tool_results, 1):
+                # 自动推导工具名称
+                tool_call_id = tool_result.tool_call_id
+                tool_call_name = "unknown"
+
+                # 从历史中查找对应的工具调用
+                for msg in self.context.get_messages():
+                    if msg.role == "assistant" and hasattr(msg, "tool_calls") and msg.tool_calls:
+                        for tc in msg.tool_calls:
+                            if tc.id == tool_call_id:
+                                tool_call_name = tc.function.name
+                                break
+
+                if tool_call_name == "unknown":
+                    logger.warning(f"无法找到工具调用信息: {tool_call_id}")
+
+                # 提取结果
+                actual_output = tool_result.result.output if hasattr(tool_result.result, 'output') else tool_result.result
+                error_msg = getattr(tool_result.result, 'message', None)
+
+                # 记录结果摘要
+                if isinstance(actual_output, list):
+                    result_summary = f"返回列表，包含 {len(actual_output)} 项"
+                elif isinstance(actual_output, dict):
+                    result_summary = f"返回字典，包含 {len(actual_output)} 个字段"
+                    if 'error' in actual_output:
+                        result_summary = f"错误: {actual_output['error']}"
+                elif error_msg:
+                    result_summary = f"错误: {error_msg}"
+                else:
+                    result_summary = f"返回: {str(actual_output)[:100]}..."
+
+                logger.info(f"  {i}. {tool_call_name}: {result_summary}")
+
+                # 使用formatter映射处理结果
+                formatter = self.tool_formatters.get(tool_call_name)
+                if formatter:
+                    # get_tasks需要dida_client参数
+                    if tool_call_name == "get_tasks":
+                        formatted = await formatter(actual_output, self.dida_client)
+                    else:
+                        formatted = await formatter(actual_output)
+                    if formatted:
+                        response_parts.append(formatted)
+
+                # 将工具结果添加到上下文历史
+                self.context.add_tool_result(tool_result.tool_call_id, actual_output)
+
+        return "\n\n".join(response_parts) if response_parts else None
+
 
 # 测试用例（已禁用）
 # 如需测试，请取消注释下面的代码
