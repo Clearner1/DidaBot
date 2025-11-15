@@ -223,242 +223,43 @@ class AIAssistant:
             # 添加用户消息到上下文（不裁剪，保持对话完整性）
             self.context.add_user_message(user_message)
 
-            # 多轮循环调用：AI可以连续使用多个工具
+            # 多轮循环调用：使用AgentLoop进行循环控制
             final_response = ""
             iteration = 0
             while iteration < self.max_iterations:
-                # 自动推导未处理工具（替代手动pending追踪，借鉴neu设计）
-                unprocessed_tools_before = self.context.get_unprocessed_tools()
-
-                logger.info(f"\n{'='*60}")
-                logger.info(f"AI调用第 {iteration + 1} 轮")
-                logger.info(f"当前未处理工具数: {len(unprocessed_tools_before)}")
-                logger.info(f"{'='*60}")
-
-                # 调用kosong.step，让AI决定使用什么工具
-                result: StepResult = await kosong.step(
-                    chat_provider=self.chat_provider,
+                # 使用AgentLoop执行一轮调用（包含kosong.step和基础工具处理）
+                actor, response_text, tool_results = await self.agent_loop.next(
+                    messages=self.context.get_messages(),
+                    context=self.context,
                     system_prompt=system_prompt,
-                    toolset=self.toolset,
-                    history=self.context.get_messages(),
+                    telegram_bot=telegram_bot,
+                    telegram_chat_id=telegram_chat_id
                 )
 
-                # 添加AI消息到上下文历史（处理空内容）
-                ai_content = result.message.content
-                if ai_content is None:
-                    ai_content = ""
-                    logger.warning("AI返回的内容为空，使用空字符串")
+                # 保存AI回复（最后一轮的回复）
+                if response_text and response_text.strip():
+                    final_response = response_text
 
-                # 将AI消息添加到上下文历史
-                self.context.add_ai_message(
-                    content=ai_content,
-                    tool_calls=result.message.tool_calls
-                )
-
-                # 记录工具调用信息（但不手动pending追踪）
-                if result.message.tool_calls:
-                    logger.info(f"[AI决策] 将调用 {len(result.message.tool_calls)} 个工具:")
-
-                    # 准备工具名称列表（用于日志和 Telegram）
-                    tool_names = []
-                    for i, tool_call in enumerate(result.message.tool_calls, 1):
-                        tool_name = tool_call.function.name
-                        tool_names.append(tool_name)
-                        logger.info(f"  {i}. {tool_name}")
-
-                    # 发送 Telegram 通知（如果有 bot 实例）
-                    if telegram_bot and telegram_chat_id:
-                        try:
-                            tool_list = "\n".join([f"  • {name}" for name in tool_names])
-                            await telegram_bot.send_message(
-                                chat_id=telegram_chat_id,
-                                text=f"🔍 AI 正在调用工具:\n{tool_list}"
-                            )
-                        except Exception as e:
-                            logger.warning(f"发送 Telegram 通知失败: {e}")
-                else:
-                    logger.info(f"[AI决策] 无工具调用，将直接回复")
-
-                # 获取工具调用结果（如果有）
-                tool_results = await result.tool_results()
-
-                # 处理不同类型的工具调用结果
-                response_parts = []
-
-                # 检测批量操作：如果有多个相同类型的工具调用，进行摘要化处理
-                tool_names = []
-                for tool_result in tool_results:
-                    for msg in self.context.get_messages():
-                        if msg.role == "assistant" and hasattr(msg, "tool_calls") and msg.tool_calls:
-                            for tc in msg.tool_calls:
-                                if tc.id == tool_result.tool_call_id:
-                                    tool_names.append(tc.function.name)
-                                    break
-
-                # 统计每种工具类型的数量
-                from collections import Counter
-                tool_counts = Counter(tool_names)
-                is_batch_operation = any(count > 1 for count in tool_counts.values())
-
-                # 如果有工具调用结果，先处理结果
-                if tool_results:
-                    logger.info(f"[工具结果] 收到 {len(tool_results)} 个工具结果:")
-
-                    # 批量创建任务摘要处理
-                    if is_batch_operation and "create_task" in tool_counts and tool_counts["create_task"] > 1:
-                        logger.info("检测到批量创建任务，进行摘要化处理")
-
-                        # 收集所有创建任务结果
-                        created_tasks = []
-                        failed_count = 0
-
-                        for i, tool_result in enumerate(tool_results, 1):
-                            # 自动推导工具名称
-                            tool_call_id = tool_result.tool_call_id
-                            tool_call_name = "unknown"
-
-                            # 从历史中查找对应的工具调用
-                            for msg in self.context.get_messages():
-                                if msg.role == "assistant" and hasattr(msg, "tool_calls") and msg.tool_calls:
-                                    for tc in msg.tool_calls:
-                                        if tc.id == tool_call_id:
-                                            tool_call_name = tc.function.name
-                                            break
-
-                            # 提取结果
-                            actual_output = tool_result.result.output if hasattr(tool_result.result, 'output') else tool_result.result
-
-                            if tool_call_name == "create_task":
-                                if isinstance(actual_output, dict) and not actual_output.get("error"):
-                                    created_tasks.append(actual_output.get("title", "未知任务"))
-                                else:
-                                    failed_count += 1
-
-                            # 处理其他工具结果（get_projects, get_current_time）
-                            else:
-                                formatter = self.tool_formatters.get(tool_call_name)
-                                if formatter:
-                                    if tool_call_name == "get_tasks":
-                                        formatted = await formatter(actual_output, self.dida_client)
-                                    else:
-                                        formatted = await formatter(actual_output)
-                                    if formatted:
-                                        response_parts.append(formatted)
-
-                        # 添加批量创建任务的摘要
-                        if created_tasks:
-                            response_parts.append(f"批量创建任务完成！已成功创建 {len(created_tasks)} 个任务：{', '.join(created_tasks)}")
-                        if failed_count > 0:
-                            response_parts.append(f"有 {failed_count} 个任务创建失败")
-
-                        # 批量操作时，不加入详细工具结果到历史，避免历史过长
-                        # 只加入一个摘要消息
-                        if created_tasks:
-                            summary = {
-                                "batch_create_task": True,
-                                "total": len(created_tasks) + failed_count,
-                                "success": len(created_tasks),
-                                "task_names": created_tasks,
-                                "failed": failed_count
-                            }
-                            # 使用第一个tool_call_id加入摘要
-                            self.context.add_tool_result(tool_results[0].tool_call_id, summary)
-
-                    # 非批量操作，按原逻辑处理
-                    else:
-                        for i, tool_result in enumerate(tool_results, 1):
-                            # 自动推导工具名称
-                            tool_call_id = tool_result.tool_call_id
-                            tool_call_name = "unknown"
-
-                            # 从历史中查找对应的工具调用
-                            for msg in self.context.get_messages():
-                                if msg.role == "assistant" and hasattr(msg, "tool_calls") and msg.tool_calls:
-                                    for tc in msg.tool_calls:
-                                        if tc.id == tool_call_id:
-                                            tool_call_name = tc.function.name
-                                            break
-
-                            if tool_call_name == "unknown":
-                                logger.warning(f"无法找到工具调用信息: {tool_call_id}")
-
-                            # 提取结果
-                            actual_output = tool_result.result.output if hasattr(tool_result.result, 'output') else tool_result.result
-                            error_msg = getattr(tool_result.result, 'message', None)
-
-                            # 记录结果摘要
-                            if isinstance(actual_output, list):
-                                result_summary = f"返回列表，包含 {len(actual_output)} 项"
-                            elif isinstance(actual_output, dict):
-                                result_summary = f"返回字典，包含 {len(actual_output)} 个字段"
-                                if 'error' in actual_output:
-                                    result_summary = f"错误: {actual_output['error']}"
-                            elif error_msg:
-                                result_summary = f"错误: {error_msg}"
-                            else:
-                                result_summary = f"返回: {str(actual_output)[:100]}..."
-
-                            logger.info(f"  {i}. {tool_call_name}: {result_summary}")
-
-                            # 使用formatter映射处理结果
-                            formatter = self.tool_formatters.get(tool_call_name)
-                            if formatter:
-                                # get_tasks需要dida_client参数
-                                if tool_call_name == "get_tasks":
-                                    formatted = await formatter(actual_output, self.dida_client)
-                                else:
-                                    formatted = await formatter(actual_output)
-                                if formatted:
-                                    response_parts.append(formatted)
-
-                            # 将工具结果添加到上下文历史
-                            self.context.add_tool_result(tool_result.tool_call_id, actual_output)
-
-
-                    # 添加AI的自然语言回复
-                    if result.message.content:
-                        if isinstance(result.message.content, str):
-                            ai_reply = result.message.content
-                        else:
-                            # 处理内容列表
-                            ai_reply = "\n".join(
-                                part.text if hasattr(part, "text") else str(part)
-                                for part in result.message.content
-                                if hasattr(part, "text")
-                            )
-
-                        if ai_reply and ai_reply.strip():
-                            response_parts.insert(0, ai_reply.strip())
-
-                    # 组合中间回复
-                    final_response = "\n\n".join(response_parts)
-
-                # 递增迭代计数器（确保所有路径都增加）
+                # 递增迭代计数器
                 iteration += 1
+                logger.info(f"[循环控制] 已完成第{iteration}轮，actor={actor}")
 
-                # 如果有工具调用，继续下一轮
+                # 处理工具结果（AIAssistant负责格式化等逻辑）
                 if tool_results:
-                    logger.info(f"[循环控制] 有工具结果，继续下一轮调用（iteration={iteration}）")
-                    continue
-                else:
-                    # 无工具调用，正常结束（无需继续调用AI）
-                    logger.info(f"[循环控制] 无工具调用，退出循环（iteration={iteration}）")
+                    tool_response = await self._process_tool_results(tool_results)
+                    if tool_response:
+                        final_response = tool_response
+
+                # 决定下一轮行为
+                if actor == "user":
+                    # 无工具调用，结束循环
+                    logger.info("[循环控制] 无更多工具，准备退出")
                     break
 
-            # 添加AI的自然语言回复
-            if result.message.content and not final_response:
-                if isinstance(result.message.content, str):
-                    ai_reply = result.message.content
-                else:
-                    # 处理内容列表
-                    ai_reply = "\n".join(
-                        part.text if hasattr(part, "text") else str(part)
-                        for part in result.message.content
-                        if hasattr(part, "text")
-                    )
-
-                if ai_reply and ai_reply.strip():
-                    final_response = ai_reply.strip()
+                # 检查是否达到最大迭代次数
+                if iteration >= self.max_iterations:
+                    logger.warning("[循环控制] 达到最大迭代次数，强制退出")
+                    break
 
             # 记录最终AI回复
             logger.info(f"\n{'='*60}")
