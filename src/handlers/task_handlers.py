@@ -26,10 +26,12 @@ class TaskHandlers:
         /addtask 项目ID 任务标题
         /addtask 项目ID 任务标题 | 任务描述
         /addtask 项目ID 任务标题 | 描述 | 优先级(0/1/3/5)
+        /addtask 项目ID 任务标题 | 描述 | 优先级 | 类型(TEXT/NOTE)
 
         示例：
         /addtask proj123 买菜
         /addtask proj123 完成报告 | 需要包含数据分析和结论 | 5
+        /addtask proj123 会议记录 | 讨论了项目进展 | 0 | NOTE
         """
         # 验证用户权限
         if not await self._check_permission(update):
@@ -42,13 +44,14 @@ class TaskHandlers:
                 "用法：\n"
                 "/addtask 项目ID 任务标题\n"
                 "/addtask 项目ID 任务标题 | 描述\n"
-                "/addtask 项目ID 任务标题 | 描述 | 优先级"
+                "/addtask 项目ID 任务标题 | 描述 | 优先级\n"
+                "/addtask 项目ID 任务标题 | 描述 | 优先级 | 类型(TEXT/NOTE)"
             )
             return
 
         # 解析命令参数
         args_text = ' '.join(context.args)
-        parts = args_text.split('|', 2)
+        parts = args_text.split('|', 3)  # 最多分割3次，支持4个部分
 
         # 解析项目ID和标题
         first_part = parts[0].strip()
@@ -78,12 +81,23 @@ class TaskHandlers:
                 await update.message.reply_text("优先级必须是数字")
                 return
 
+        # 解析kind参数
+        kind = None
+        if len(parts) > 3:
+            kind_param = parts[3].strip().upper()
+            if kind_param in ['TEXT', 'NOTE']:
+                kind = kind_param
+            else:
+                await update.message.reply_text("类型必须是 TEXT 或 NOTE")
+                return
+
         try:
             # 创建任务
             new_task = Task(
                 title=title,
                 project_id=project_id,
                 content=content,
+                kind=kind,
                 priority=priority
             )
 

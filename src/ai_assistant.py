@@ -43,6 +43,7 @@ from src.formatter import (
     format_update_task,
     format_create_task,
     format_current_time,
+    format_get_project_columns,
 )
 from src.tools.dida_tools import (
     GetCurrentTimeTool,
@@ -53,6 +54,7 @@ from src.tools.dida_tools import (
     CreateTaskTool,
     UpdateTaskTool,
     DeleteTaskTool,
+    GetProjectColumnsTool,
 )
 
 # 配置日志
@@ -108,6 +110,7 @@ class AIAssistant:
             self.toolset += GetProjectsTool(dida_client)
             self.toolset += GetTasksTool(dida_client)
             self.toolset += GetTaskDetailTool(dida_client)
+            self.toolset += GetProjectColumnsTool(dida_client)
             self.toolset += CompleteTaskTool(dida_client)
             self.toolset += CreateTaskTool(dida_client)
             self.toolset += UpdateTaskTool(dida_client)
@@ -135,6 +138,7 @@ class AIAssistant:
             "get_projects": format_get_projects,
             "get_tasks": format_get_tasks,
             "get_task_detail": format_get_task_detail,
+            "get_project_columns": format_get_project_columns,
             "complete_task": format_complete_task,
             "delete_task": format_delete_task,
             "update_task": format_update_task,

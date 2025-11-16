@@ -13,6 +13,7 @@ from .tool_formatter import (
     format_update_task,
     format_create_task,
     format_current_time,
+    format_get_project_columns,
 )
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "format_update_task",
     "format_create_task",
     "format_current_time",
+    "format_get_project_columns",
 ]

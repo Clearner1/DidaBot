@@ -17,6 +17,7 @@ class Task(BaseModel):
     title: str
     content: Optional[str] = None
     desc: Optional[str] = None
+    kind: Optional[str] = None   # "TEXT" (普通任务), "NOTE" (笔记条目)
     is_all_day: bool = False
     start_date: Optional[str] = None
     due_date: Optional[str] = None
@@ -28,6 +29,7 @@ class Task(BaseModel):
     reminders: List[str] = []
     repeat_flag: Optional[str] = None
     items: List[dict] = []
+    column_id: Optional[str] = None  # 看板列ID，用于看板模式下的列管理
 
     class Config:
         """字段别名配置 - 处理API返回的驼峰命名"""
@@ -131,6 +133,52 @@ class DidaClient:
 
     # ===== 任务操作 =====
 
+    async def get_project_data(self, project_id: str) -> dict:
+        """
+        获取项目的完整数据，包括任务和列信息
+
+        Args:
+            project_id: 项目ID
+
+        Returns:
+            包含项目信息、任务列表和列列表的字典
+            {
+                "project": Project对象,
+                "tasks": List[Task],
+                "columns": List[dict]  # 列信息，包含id, name, sortOrder等
+            }
+        """
+        try:
+            response = await self.client.get(f"/open/v1/project/{project_id}/data")
+            response.raise_for_status()
+
+            data = response.json()
+
+            # 解析项目信息
+            project_data = data.get("project", {})
+            project = Project(**project_data)
+
+            # 解析任务列表
+            tasks_data = data.get("tasks", [])
+            tasks = []
+            for task_data in tasks_data:
+                task_data["project_id"] = project_id
+                tasks.append(Task(**task_data))
+
+            # 解析列信息
+            columns = data.get("columns", [])
+
+            return {
+                "project": project,
+                "tasks": tasks,
+                "columns": columns
+            }
+
+        except httpx.HTTPStatusError as e:
+            raise Exception(f"获取项目数据失败: HTTP {e.response.status_code} - {e.response.text}")
+        except Exception as e:
+            raise Exception(f"获取项目数据失败: {str(e)}")
+
     async def get_tasks(self, project_id: Optional[str] = None) -> List[Task]:
         """
         获取任务列表
@@ -226,6 +274,8 @@ class DidaClient:
                 task_data["content"] = task.content
             if task.desc:
                 task_data["desc"] = task.desc
+            if task.kind:
+                task_data["kind"] = task.kind
             if task.is_all_day is not None:
                 task_data["isAllDay"] = task.is_all_day
             if task.start_date:
@@ -242,6 +292,8 @@ class DidaClient:
                 task_data["sortOrder"] = task.sort_order
             if task.time_zone:
                 task_data["timeZone"] = task.time_zone
+            if task.column_id:
+                task_data["columnId"] = task.column_id
             if task.items:
                 task_data["items"] = task.items
 
@@ -291,6 +343,8 @@ class DidaClient:
                 task_data["content"] = task.content
             if task.desc:
                 task_data["desc"] = task.desc
+            if task.kind:
+                task_data["kind"] = task.kind
             if task.is_all_day is not None:
                 task_data["isAllDay"] = task.is_all_day
             if task.start_date:
@@ -309,6 +363,8 @@ class DidaClient:
                 task_data["sortOrder"] = task.sort_order
             if task.time_zone:
                 task_data["timeZone"] = task.time_zone
+            if task.column_id:
+                task_data["columnId"] = task.column_id
             if task.items:
                 task_data["items"] = task.items
 

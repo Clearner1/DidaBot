@@ -51,6 +51,12 @@ class DeleteTaskParams(BaseModel):
     """任务ID"""
 
 
+class GetProjectColumnsParams(BaseModel):
+    """获取项目列信息参数"""
+    project_id: str
+    """项目ID"""
+
+
 class CreateTaskParams(BaseModel):
     """创建任务参数"""
     title: str
@@ -59,6 +65,8 @@ class CreateTaskParams(BaseModel):
     """项目ID"""
     content: Optional[str] = None
     """任务内容（子任务、备注等）"""
+    kind: Optional[str] = None
+    """条目类型：'TEXT' (普通任务), 'NOTE' (笔记条目)"""
     priority: Optional[int] = 0
     """优先级：0=无, 1=低, 3=中, 5=高"""
     due_date: Optional[str] = None
@@ -73,6 +81,8 @@ class CreateTaskParams(BaseModel):
     """重复规则（RRULE格式）"""
     time_zone: Optional[str] = "Asia/Shanghai"
     """时区，默认 Asia/Shanghai"""
+    column_id: Optional[str] = None
+    """看板列ID：用于看板模式下的任务管理，指定任务创建到哪个列中"""
 
 
 class UpdateTaskParams(BaseModel):
@@ -81,7 +91,7 @@ class UpdateTaskParams(BaseModel):
     """任务ID（必需）"""
     project_id: str
     """项目ID（必需）"""
-    
+
     # 以下字段都是可选的，只更新提供的字段
     title: Optional[str] = None
     """任务标题"""
@@ -89,6 +99,8 @@ class UpdateTaskParams(BaseModel):
     """任务内容"""
     desc: Optional[str] = None
     """任务描述"""
+    kind: Optional[str] = None
+    """条目类型：'TEXT' (普通任务), 'NOTE' (笔记条目)"""
     priority: Optional[int] = None
     """优先级：0=无, 1=低, 3=中, 5=高"""
     due_date: Optional[str] = None
@@ -105,6 +117,8 @@ class UpdateTaskParams(BaseModel):
     """重复规则（RRULE格式）"""
     time_zone: Optional[str] = None
     """时区"""
+    column_id: Optional[str] = None
+    """看板列ID：用于在看板列之间移动任务"""
 
 
 class GetCurrentTimeTool(CallableTool2[GetCurrentTimeParams]):
@@ -287,7 +301,19 @@ class CreateTaskTool(CallableTool2[CreateTaskParams]):
     """在滴答清单中创建新任务"""
 
     name: str = "create_task"
-    description: str = """在滴答清单中创建新任务。
+    description: str = """在滴答清单中创建新任务或笔记条目。
+
+    条目类型说明（重要）：
+    - kind="TEXT": 普通任务（默认）
+    - kind="NOTE": 笔记条目（用于记录、思考、会议记录等）
+
+    当用户说要创建"笔记"、"记录"、"会议纪要"、"想法"等时，使用 kind="NOTE"
+
+    看板列支持（重要）：
+    - column_id: 指定任务创建到哪个看板列中
+    - 用于看板模式下的任务分类管理
+    - 创建前可以先调用 get_project_columns 获取列信息
+    - 用户说"在XX列创建任务"时，需要先获取该列的ID
 
     时间参数说明（重要）：
     - due_date/start_date 应该提供**本地时间**（北京时间 UTC+8）
@@ -298,7 +324,10 @@ class CreateTaskTool(CallableTool2[CreateTaskParams]):
     工具会自动将本地时间转换为UTC时间发送给滴答清单API。
 
     自然语言示例：
-    - 用户说"明天下午3点" → 你应该计算明天的日期，提供 "2025-11-13T15:00:00+08:00"
+    - 用户说"在YDY列创建笔记" → 先获取YDY列ID，使用 kind="NOTE" 和 column_id
+    - 用户说"在开发列创建任务" → 先获取开发列ID，再创建任务
+    - 用户说"记录会议内容" → 使用 kind="NOTE"
+    - 用户说"明天下午3点" → 计算明天的日期，提供 "2025-11-13T15:00:00+08:00"
     - 用户说"下周一" → 计算日期，提供 "2025-11-18T23:59:59+08:00"
     - 用户说"11月20号上午10点" → 提供 "2025-11-20T10:00:00+08:00"
 
@@ -333,6 +362,12 @@ class CreateTaskTool(CallableTool2[CreateTaskParams]):
       * "每周" + 星期 → RRULE:FREQ=WEEKLY;BYDAY=...
       * "工作日"、"上班日" → RRULE:FREQ=DAILY;TT_SKIP=WEEKEND
       * "每月" + 日期 → RRULE:FREQ=MONTHLY;BYMONTHDAY=...
+
+    列管理工作流程：
+    1. 用户说"在XX列创建任务"
+    2. 先调用 get_project_columns 获取列列表
+    3. 找到匹配的列名称，获取列ID
+    4. 调用 create_task，传入 column_id 参数
     """
     params: type[CreateTaskParams] = CreateTaskParams
 
@@ -397,13 +432,15 @@ class CreateTaskTool(CallableTool2[CreateTaskParams]):
                 title=params.title,
                 project_id=params.project_id,
                 content=params.content,
+                kind=params.kind,
                 priority=params.priority or 0,
                 due_date=utc_due_date,
                 start_date=utc_start_date,
                 is_all_day=params.is_all_day or False,
                 reminders=params.reminders or [],
                 repeat_flag=params.repeat_flag,
-                time_zone=params.time_zone or "Asia/Shanghai"
+                time_zone=params.time_zone or "Asia/Shanghai",
+                column_id=params.column_id  # 添加列ID支持
             )
 
             # 创建任务
@@ -439,35 +476,53 @@ class UpdateTaskTool(CallableTool2[UpdateTaskParams]):
 
     name: str = "update_task"
     description: str = """更新滴答清单中已有任务的信息（部分更新）。
-    
+
     功能说明：
     - 只更新用户明确要求修改的字段，其他字段保持不变
     - 必须提供 task_id 和 project_id
-    - 可更新的字段包括：标题、描述、优先级、截止时间、状态、提醒、重复规则等
-    
+    - 可更新的字段包括：标题、描述、类型(kind)、优先级、截止时间、状态、提醒、重复规则、列位置等
+
+    类型更新说明：
+    - kind="TEXT": 改为普通任务
+    - kind="NOTE": 改为笔记条目
+
+    当用户说要"改为笔记"、"改成任务"等时，使用 kind 参数
+
+    看板列支持（重要）：
+    - column_id: 指定任务移动到哪个看板列中
+    - 用于在看板列之间移动任务
+    - 用户说"把任务移动到XX列"、"把任务转移到XX"时使用
+    - 移动前可以先调用 get_project_columns 获取目标列ID
+
     使用场景：
     - 用户说"修改任务标题"、"更新截止时间"、"提升优先级"等
     - 用户说"把XX任务改成XX"
+    - 用户说"将XX任务移动到XX列"、"把任务转移到XX"
     - 用户说"将XX任务的截止时间改到XX"
-    
+
     时间参数说明（重要）：
     - due_date/start_date 应该提供**本地时间**（北京时间 UTC+8）
     - 格式1（推荐）：ISO 8601格式，带时区 "2025-11-15T14:30:00+08:00"
     - 格式2：只有日期 "2025-11-15"（将默认为当天23:59:59）
     - 格式3：日期+时间（无时区）"2025-11-15 14:30"（将假设为本地时间）
-    
+
     工具会自动将本地时间转换为UTC时间发送给滴答清单API。
-    
+
     优先级关键词映射：
     - "无"、"普通"、"一般" → 0
     - "低"、"不急" → 1
     - "中"、"中等" → 3
     - "高"、"重要"、"紧急" → 5
-    
+
     状态说明：
     - 0 = 未完成
     - 2 = 已完成
-    
+
+    列移动工作流程：
+    1. 用户说"把任务移动到XX列"
+    2. 先调用 get_project_columns 获取目标列ID
+    3. 调用 update_task，传入新的 column_id 参数
+
     提醒和重复规则格式与创建任务相同。
     """
     params: type[UpdateTaskParams] = UpdateTaskParams
@@ -508,7 +563,13 @@ class UpdateTaskTool(CallableTool2[UpdateTaskParams]):
             if params.desc is not None:
                 existing_task.desc = params.desc
                 updated_fields.append("描述")
-            
+
+            if params.kind is not None:
+                existing_task.kind = params.kind
+                kind_names = {"TEXT": "普通任务", "NOTE": "笔记条目"}
+                kind_name = kind_names.get(params.kind, params.kind)
+                updated_fields.append(f"类型({kind_name})")
+
             if params.priority is not None:
                 existing_task.priority = params.priority
                 priority_names = {0: "无", 1: "低", 3: "中", 5: "高"}
@@ -535,6 +596,10 @@ class UpdateTaskTool(CallableTool2[UpdateTaskParams]):
             if params.time_zone is not None:
                 existing_task.time_zone = params.time_zone
                 updated_fields.append("时区")
+
+            if params.column_id is not None:
+                existing_task.column_id = params.column_id
+                updated_fields.append("看板列")
             
             # 第三步：处理截止日期（如果提供）- 本地时间转UTC
             display_due_date = None
@@ -696,5 +761,69 @@ class DeleteTaskTool(CallableTool2[DeleteTaskParams]):
             return ToolOk(output={
                 "success": False,
                 "error": f"删除任务过程出错: {str(e)}"
+            })
+
+
+class GetProjectColumnsTool(CallableTool2[GetProjectColumnsParams]):
+    """获取项目的看板列信息"""
+
+    name: str = "get_project_columns"
+    description: str = """获取指定项目的看板列信息，返回项目中所有的列及其详细信息。
+
+    功能说明：
+    - 获取项目中所有列的名称、ID和排序信息
+    - 用于看板模式下的列管理和任务分配
+    - 帮助用户了解项目的列结构
+
+    返回信息：
+    - 列ID (columnId): 用于创建或移动任务到指定列
+    - 列名称 (name): 列的显示名称
+    - 排序值 (sortOrder): 列的显示顺序
+
+    使用场景：
+    - 用户询问项目有哪些列时
+    - 需要知道列ID以便创建任务到特定列时
+    - 在看板列之间移动任务前了解可用列时
+
+    示例：
+    - 用户说"这个项目有哪些列？" → 调用此工具获取列信息
+    - 用户说"在YDY列创建任务" → 先调用此工具获取YDY列的ID，再创建任务
+    """
+    params: type[GetProjectColumnsParams] = GetProjectColumnsParams
+
+    def __init__(self, dida_client: DidaClient):
+        super().__init__()
+        object.__setattr__(self, 'dida_client', dida_client)
+
+    async def __call__(self, params: GetProjectColumnsParams) -> ToolReturnType:
+        try:
+            # 获取项目完整数据（包括列信息）
+            project_data = await self.dida_client.get_project_data(params.project_id)
+
+            columns = project_data.get("columns", [])
+            project_name = project_data.get("project", {}).name if project_data.get("project") else "未知项目"
+
+            # 格式化列信息
+            formatted_columns = []
+            for column in columns:
+                formatted_columns.append({
+                    "column_id": column.get("id"),
+                    "name": column.get("name"),
+                    "sort_order": column.get("sortOrder"),
+                    "project_id": column.get("projectId")
+                })
+
+            return ToolOk(output={
+                "success": True,
+                "project_id": params.project_id,
+                "project_name": project_name,
+                "columns": formatted_columns,
+                "total_columns": len(formatted_columns)
+            })
+
+        except Exception as e:
+            return ToolOk(output={
+                "success": False,
+                "error": f"获取项目列信息失败: {str(e)}"
             })
 

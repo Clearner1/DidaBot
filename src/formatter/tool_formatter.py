@@ -229,6 +229,37 @@ async def format_current_time(time_info: Dict[str, Any]) -> str:
     return None
 
 
+async def format_get_project_columns(result: Dict[str, Any]) -> str:
+    """格式化获取项目列信息的结果"""
+    if not result.get("success"):
+        return f"获取项目列信息失败: {result.get('error', '未知错误')}"
+
+    project_name = result.get('project_name', '未知项目')
+    total_columns = result.get('total_columns', 0)
+    columns = result.get('columns', [])
+
+    if total_columns == 0:
+        return f"项目 '{project_name}' 没有设置看板列"
+
+    response_parts = [
+        f"📋 项目 '{project_name}' 的看板列 ({total_columns}个):"
+    ]
+
+    for i, column in enumerate(columns, 1):
+        column_name = column.get('name', '未命名列')
+        column_id = column.get('column_id', '')
+        column_id_short = column_id[:8] + '...' if column_id else 'N/A'
+        sort_order = column.get('sort_order', 0)
+
+        response_parts.append(
+            f"  {i}. {column_name} (ID: {column_id_short}, 顺序: {sort_order})"
+        )
+
+    response_parts.append("\n💡 提示：可以使用列名称或ID在指定列中创建或移动任务")
+
+    return "\n".join(response_parts)
+
+
 async def format_error(error_dict: Dict[str, Any]) -> str:
     """格式化错误信息"""
     if "error" in error_dict:
