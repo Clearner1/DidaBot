@@ -6,7 +6,7 @@
 from typing import Optional
 from telegram import Update
 from telegram.ext import ContextTypes
-from dida_client import DidaClient, Project
+from src.dida_client import DidaClient, Project
 from utils.formatter import format_project_list, format_error_message
 
 

@@ -6,9 +6,34 @@
 
 from typing import Optional, List
 from pydantic import BaseModel
-from dida_client import DidaClient, Task
-from kosong.tooling import CallableTool2, ToolOk, ToolReturnType
-from kosong.utils.typing import JsonType
+from src.dida_client import DidaClient, Task
+# 尝试导入kosong，如果失败则使用备用方案
+try:
+    from kosong.tooling import CallableTool2, ToolOk, ToolReturnType
+    from kosong.utils.typing import JsonType
+    KOSONG_AVAILABLE = True
+except ImportError:
+    # 如果无法导入kosong，使用备用方案
+    from typing import Any, Dict
+
+    class MockCallableTool2:
+        """模拟的CallableTool2基类"""
+        def __init__(self, **kwargs):
+            pass
+
+    class MockToolOk:
+        """模拟的ToolOk类"""
+        def __init__(self, output):
+            self.output = output
+
+    CallableTool2 = MockCallableTool2
+    ToolOk = MockToolOk
+    ToolReturnType = Any
+    JsonType = Any
+    KOSONG_AVAILABLE = False
+import os
+from src.services.pomodoro_service import pomodoro_service
+from src.utils.time_utils import TimeUtils
 
 
 class GetCurrentTimeParams(BaseModel):
@@ -121,7 +146,7 @@ class UpdateTaskParams(BaseModel):
     """看板列ID：用于在看板列之间移动任务"""
 
 
-class GetCurrentTimeTool(CallableTool2[GetCurrentTimeParams]):
+class GetCurrentTimeTool(CallableTool2):
     """获取当前时间（北京时间 UTC+8）"""
 
     name: str = "get_current_time"
@@ -194,7 +219,7 @@ class GetCurrentTimeTool(CallableTool2[GetCurrentTimeParams]):
             })
 
 
-class GetProjectsTool(CallableTool2[GetProjectsParams]):
+class GetProjectsTool(CallableTool2):
     """获取所有滴答清单项目"""
 
     name: str = "get_projects"
@@ -220,7 +245,7 @@ class GetProjectsTool(CallableTool2[GetProjectsParams]):
             return ToolOk(output={"error": f"获取项目失败: {str(e)}"})
 
 
-class GetTasksTool(CallableTool2[GetTasksParams]):
+class GetTasksTool(CallableTool2):
     """获取滴答清单任务"""
 
     name: str = "get_tasks"
@@ -254,7 +279,7 @@ class GetTasksTool(CallableTool2[GetTasksParams]):
             return ToolOk(output={"error": f"获取任务失败: {str(e)}"})
 
 
-class CompleteTaskTool(CallableTool2[CompleteTaskParams]):
+class CompleteTaskTool(CallableTool2):
     """完成滴答清单任务"""
 
     name: str = "complete_task"
@@ -278,7 +303,7 @@ class CompleteTaskTool(CallableTool2[CompleteTaskParams]):
             return ToolOk(output={"error": f"完成任务失败: {str(e)}"})
 
 
-class GetTaskDetailTool(CallableTool2[GetTaskDetailParams]):
+class GetTaskDetailTool(CallableTool2):
     """获取任务详细信息"""
 
     name: str = "get_task_detail"
@@ -297,7 +322,7 @@ class GetTaskDetailTool(CallableTool2[GetTaskDetailParams]):
             return ToolOk(output={"error": f"获取任务详情失败: {str(e)}"})
 
 
-class CreateTaskTool(CallableTool2[CreateTaskParams]):
+class CreateTaskTool(CallableTool2):
     """在滴答清单中创建新任务"""
 
     name: str = "create_task"
@@ -471,7 +496,7 @@ class CreateTaskTool(CallableTool2[CreateTaskParams]):
             })
 
 
-class UpdateTaskTool(CallableTool2[UpdateTaskParams]):
+class UpdateTaskTool(CallableTool2):
     """更新滴答清单中的任务"""
 
     name: str = "update_task"
@@ -682,7 +707,7 @@ class UpdateTaskTool(CallableTool2[UpdateTaskParams]):
             })
 
 
-class DeleteTaskTool(CallableTool2[DeleteTaskParams]):
+class DeleteTaskTool(CallableTool2):
     """删除滴答清单中的任务"""
 
     name: str = "delete_task"
@@ -764,7 +789,7 @@ class DeleteTaskTool(CallableTool2[DeleteTaskParams]):
             })
 
 
-class GetProjectColumnsTool(CallableTool2[GetProjectColumnsParams]):
+class GetProjectColumnsTool(CallableTool2):
     """获取项目的看板列信息"""
 
     name: str = "get_project_columns"
@@ -826,4 +851,93 @@ class GetProjectColumnsTool(CallableTool2[GetProjectColumnsParams]):
                 "success": False,
                 "error": f"获取项目列信息失败: {str(e)}"
             })
+
+
+# ================================
+# 番茄钟AI工具
+# ================================
+
+class StartTaskPomodoroParams(BaseModel):
+    """启动任务番茄钟参数"""
+    task_id: str
+    """任务ID"""
+    task_title: Optional[str] = None
+    """任务标题（可选，如果不提供会自动获取）"""
+    duration: Optional[int] = 25
+    """专注时长（分钟），默认25分钟"""
+    project_id: Optional[str] = None    
+    """项目ID（可选，用于获取任务信息）"""
+
+
+class StartTaskPomodoroTool(CallableTool2):
+    """启动任务番茄钟"""
+
+    name: str = "start_task_pomodoro"
+    description: str = "为指定任务启动番茄钟，支持智能时长建议和任务关联"
+    params: type[StartTaskPomodoroParams] = StartTaskPomodoroParams
+
+    def __init__(self, dida_client: DidaClient):
+        super().__init__()
+        object.__setattr__(self, 'dida_client', dida_client)
+
+    async def __call__(self, params: StartTaskPomodoroParams) -> ToolReturnType:
+        try:
+            # 获取认证令牌
+            auth_token = os.getenv('DIDA_T_COOKIE')
+            csrf_token = os.getenv('DIDA_CSRF_TOKEN')
+
+            if not auth_token or not csrf_token:
+                return ToolOk(output={"error": "番茄钟认证令牌未配置"})
+
+            # 获取任务信息
+            task_title = params.task_title
+            if not task_title and params.project_id:
+                try:
+                    task = await self.dida_client.get_task(params.project_id, params.task_id)
+                    if task:
+                        task_title = task.title
+                except:
+                    pass
+
+            if not task_title:
+                task_title = f"任务_{params.task_id[:8]}"
+
+            # 启动番茄钟
+            result = await pomodoro_service.start_focus(
+                auth_token, csrf_token,
+                duration=params.duration or 25,
+                note=f"AI启动的任务番茄钟: {task_title}",
+                focus_on_id=params.task_id,
+                focus_on_title=task_title,
+                focus_on_type=0
+            )
+
+            if "error" in result:
+                return ToolOk(output={"error": f"启动番茄钟失败: {result['error']}"})
+
+            current = result.get("current", {})
+
+            # 计算结束时间
+            end_time_str = "未知"
+            try:
+                end_time = current.get('endTime', '')
+                if end_time:
+                    end_time_local = TimeUtils.utc_to_local_str(end_time, "%H:%M")
+                    end_time_str = end_time_local
+            except:
+                pass
+
+            return ToolOk(output={
+                "success": True,
+                "message": f"已为任务'{task_title}'启动{params.duration or 25}分钟番茄钟",
+                "task_id": params.task_id,
+                "task_title": task_title,
+                "duration": params.duration or 25,
+                "end_time": end_time_str,
+                "pomodoro_id": current.get('id', ''),
+                "status": "运行中"
+            })
+
+        except Exception as e:
+            return ToolOk(output={"error": f"启动任务番茄钟失败: {str(e)}"})
 

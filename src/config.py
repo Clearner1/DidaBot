@@ -19,6 +19,10 @@ class Config(BaseSettings):
     dida_access_token: str
     dida_base_url: str = "https://api.dida365.com"
 
+    # 滴答清单番茄钟认证配置 (Web Cookie)
+    dida_t_cookie: Optional[str] = None
+    dida_csrf_token: Optional[str] = None
+
     # AI Assistant 配置（GLM）
     anthropic_api_key: Optional[str] = None
     anthropic_base_url: str = "https://open.bigmodel.cn/api/anthropic"
@@ -47,6 +51,12 @@ class Config(BaseSettings):
         print(f"  Bot Token: {self.telegram_bot_token[:20]}...")
         print(f"  Admin User ID: {self.bot_admin_user_id}")
         print(f"  Dida Token: {self.dida_access_token[:20]}...")
+
+        # 番茄钟配置检查
+        if self.dida_t_cookie and self.dida_csrf_token:
+            print(f"  番茄钟功能: 已启用")
+        else:
+            print(f"  番茄钟功能: 未启用 (请配置 DIDA_T_COOKIE 和 DIDA_CSRF_TOKEN)")
 
         # AI助手配置检查
         if self.anthropic_api_key:

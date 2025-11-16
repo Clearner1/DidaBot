@@ -7,6 +7,12 @@ Telegram Bot 主入口
 import asyncio
 import logging
 from datetime import datetime
+from pathlib import Path
+from dotenv import load_dotenv
+
+# 加载环境变量（确保 os.getenv() 可以读取 .env 文件）
+load_dotenv(Path(__file__).parent.parent / ".env")
+
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -19,9 +25,19 @@ from telegram.ext import (
 from telegram.error import TelegramError
 
 from config import get_config
-from dida_client import DidaClient
+from src.dida_client import DidaClient
 from handlers.task_handlers import TaskHandlers
 from handlers.project_handlers import ProjectHandlers
+from handlers.pomodoro_handlers import (
+    handle_pomodoro_status,
+    handle_pomodoro_start,
+    handle_pomodoro_pause,
+    handle_pomodoro_continue,
+    handle_pomodoro_finish,
+    handle_pomodoro_stop,
+    handle_pomodoro_help
+)
+from handlers.task_pomodoro_handlers import TaskPomodoroHandlers
 from utils.formatter import format_help_message, format_error_message
 
 # AI Assistant（可选）
@@ -79,6 +95,7 @@ class DidaBot:
             print("正在初始化命令处理器...")
             self.task_handlers = TaskHandlers(self.dida_client)
             self.project_handlers = ProjectHandlers(self.dida_client)
+            self.task_pomodoro_handlers = TaskPomodoroHandlers(self.dida_client)
 
             # 初始化AI助手（如果配置了API密钥）
             if AI_AVAILABLE and self.config.anthropic_api_key:
@@ -129,6 +146,20 @@ class DidaBot:
         self.application.add_handler(CommandHandler("listtasks", self.task_handlers.cmd_listtasks))
         self.application.add_handler(CommandHandler("completetask", self.task_handlers.cmd_completetask))
         self.application.add_handler(CommandHandler("deletetask", self.task_handlers.cmd_deletetask))
+
+        # 番茄钟命令
+        self.application.add_handler(CommandHandler("pomodoro_status", handle_pomodoro_status))
+        self.application.add_handler(CommandHandler("pomodoro_start", handle_pomodoro_start))
+        self.application.add_handler(CommandHandler("pomodoro_pause", handle_pomodoro_pause))
+        self.application.add_handler(CommandHandler("pomodoro_continue", handle_pomodoro_continue))
+        self.application.add_handler(CommandHandler("pomodoro_finish", handle_pomodoro_finish))
+        self.application.add_handler(CommandHandler("pomodoro_stop", handle_pomodoro_stop))
+        self.application.add_handler(CommandHandler("pomodoro_help", handle_pomodoro_help))
+
+        # 任务与番茄钟联动命令
+        self.application.add_handler(CommandHandler("task_pomodoro", self.task_pomodoro_handlers.cmd_task_pomodoro))
+        self.application.add_handler(CommandHandler("task_pomodoro_status", self.task_pomodoro_handlers.cmd_task_pomodoro_status))
+        self.application.add_handler(CommandHandler("create_task_pomodoro", self.task_pomodoro_handlers.cmd_create_task_pomodoro))
 
         # AI对话处理器（使用ConversationHandler实现上下文窗口）
         if self.ai_assistant:
@@ -472,6 +503,16 @@ class DidaBot:
                 BotCommand("completetask", "完成任务"),
                 BotCommand("deletetask", "删除任务"),
                 BotCommand("project_info", "查看项目详情"),
+                BotCommand("pomodoro_status", "番茄钟状态"),
+                BotCommand("pomodoro_start", "启动番茄钟"),
+                BotCommand("pomodoro_pause", "暂停番茄钟"),
+                BotCommand("pomodoro_continue", "继续番茄钟"),
+                BotCommand("pomodoro_finish", "完成番茄钟"),
+                BotCommand("pomodoro_stop", "停止番茄钟"),
+                BotCommand("pomodoro_help", "番茄钟帮助"),
+                BotCommand("task_pomodoro", "任务番茄钟"),
+                BotCommand("task_pomodoro_status", "任务番茄钟状态"),
+                BotCommand("create_task_pomodoro", "创建任务并启动番茄钟"),
             ]
             await self.application.bot.set_my_commands(commands)
             logger.info("Telegram命令菜单已设置完成")

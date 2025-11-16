@@ -4,7 +4,7 @@
 """
 
 from typing import Dict, List
-from dida_client import Task, Project
+from src.dida_client import Task, Project
 
 
 def format_task(task: Task, project_name: str = "未知项目") -> str:

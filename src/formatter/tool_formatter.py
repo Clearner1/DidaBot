@@ -6,7 +6,7 @@
 
 import json
 from typing import Any, Dict, List
-from utils.time_utils import TimeUtils
+from src.utils.time_utils import TimeUtils
 
 
 async def format_get_projects(projects: List[Dict[str, Any]]) -> str:

@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(cat /e/15py/tg-dida/src/bot.py)",
-      "Bash(cat /e/15py/tg-dida/src/handlers/task_handlers.py)"
+      "Bash(cat /e/15py/tg-dida/src/handlers/task_handlers.py)",
+      "Bash(python:*)"
     ],
     "deny": [],
     "ask": []

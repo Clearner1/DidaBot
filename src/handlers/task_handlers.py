@@ -8,7 +8,7 @@ from typing import Optional
 from telegram import Update
 from telegram.ext import ContextTypes
 from telegram.error import TelegramError
-from dida_client import DidaClient, Task
+from src.dida_client import DidaClient, Task
 from utils.formatter import format_task_list, format_task, format_error_message, format_success_message
 
 

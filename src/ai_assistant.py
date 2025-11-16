@@ -19,7 +19,12 @@ from datetime import datetime, date
 
 from src.utils.time_utils import TimeUtils
 
-import kosong
+try:
+    import kosong
+except ImportError as e:
+    print(f"无法导入kosong框架: {e}")
+    print("提示：kosong框架可能需要额外安装")
+    raise ImportError(f"kosong框架导入失败: {e}")
 from kosong.message import Message
 from kosong.tooling.simple import SimpleToolset
 from kosong import StepResult
@@ -45,6 +50,7 @@ from src.formatter import (
     format_current_time,
     format_get_project_columns,
 )
+from src.formatter.pomodoro_formatter import format_start_task_pomodoro
 from src.tools.dida_tools import (
     GetCurrentTimeTool,
     GetProjectsTool,
@@ -55,6 +61,7 @@ from src.tools.dida_tools import (
     UpdateTaskTool,
     DeleteTaskTool,
     GetProjectColumnsTool,
+    StartTaskPomodoroTool,
 )
 
 # 配置日志
@@ -116,6 +123,10 @@ class AIAssistant:
             self.toolset += UpdateTaskTool(dida_client)
             self.toolset += DeleteTaskTool(dida_client)
 
+        # 添加番茄钟相关工具
+        if dida_client:
+            self.toolset += StartTaskPomodoroTool(dida_client)
+
         # 创建对话上下文管理器（Phase 1: 替代手动pending_tool_calls）
         # 借鉴neu-translator设计：自动推导状态，不手动维护
         self.context = ConversationContext(max_history_length=max_history_length)
@@ -143,6 +154,7 @@ class AIAssistant:
             "delete_task": format_delete_task,
             "update_task": format_update_task,
             "create_task": format_create_task,
+            "start_task_pomodoro": format_start_task_pomodoro,
         }
         logger.info(f"Tool formatter映射创建完成（Phase 4）")
 
@@ -415,7 +427,12 @@ class AIAssistant:
                     if tool_call_name == "get_tasks":
                         formatted = await formatter(actual_output, self.dida_client)
                     else:
-                        formatted = await formatter(actual_output)
+                        # 检查formatter是否是异步函数
+                        import inspect
+                        if inspect.iscoroutinefunction(formatter):
+                            formatted = await formatter(actual_output)
+                        else:
+                            formatted = formatter(actual_output)
                     if formatted:
                         response_parts.append(formatted)
 
