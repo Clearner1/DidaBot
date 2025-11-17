@@ -174,34 +174,22 @@ class AIAssistant:
             # 检查截止日期（优先）
             due_date = task.get("due_date")
             if due_date:
-                # 解析ISO格式日期
-                if isinstance(due_date, str):
-                    if "T" in due_date:
-                        # 包含时间，解析UTC日期然后转换为本地日期
-                        task_dt_utc = datetime.fromisoformat(
-                            due_date.replace("Z", "+00:00")
-                        )
-                        # 转换为本地时区日期
-                        task_date_local = task_dt_utc.astimezone().date()
-                    else:
-                        # 只有日期，假设是本地日期
-                        task_date_local = datetime.fromisoformat(due_date).date()
-
+                try:
+                    # 使用 TimeUtils 统一处理时间转换
+                    task_date_local = TimeUtils.utc_to_local_date(due_date)
                     return task_date_local == today_local
+                except Exception:
+                    pass  # 继续检查开始日期
 
             # 检查开始日期（作为备选）
             start_date = task.get("start_date")
             if start_date:
-                if isinstance(start_date, str):
-                    if "T" in start_date:
-                        task_dt_utc = datetime.fromisoformat(
-                            start_date.replace("Z", "+00:00")
-                        )
-                        task_date_local = task_dt_utc.astimezone().date()
-                    else:
-                        task_date_local = datetime.fromisoformat(start_date).date()
-
+                try:
+                    # 使用 TimeUtils 统一处理时间转换
+                    task_date_local = TimeUtils.utc_to_local_date(start_date)
                     return task_date_local == today_local
+                except Exception:
+                    pass
 
             return False
 

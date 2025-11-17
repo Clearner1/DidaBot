@@ -132,6 +132,7 @@ class TimeUtils:
                 - "chinese": "11月12日 00:00"
                 - "full": "2025-11-12 00:00"
                 - "time_only": "00:00"
+                - 自定义格式字符串，如 "%m-%d"
 
         Returns:
             格式化后的日期字符串
@@ -149,8 +150,8 @@ class TimeUtils:
             # 仅时间：00:00
             return TimeUtils.utc_to_local_str(due_date, "%H:%M")
         else:
-            # 默认格式
-            return TimeUtils.utc_to_local_str(due_date)
+            # 自定义格式或默认格式
+            return TimeUtils.utc_to_local_str(due_date, style)
 
     @staticmethod
     def local_to_utc_str(local_datetime: datetime, format_iso: bool = True) -> str:

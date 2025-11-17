@@ -5,6 +5,7 @@
 
 from typing import Dict, List
 from src.dida_client import Task, Project
+from src.utils.time_utils import TimeUtils
 
 
 def format_task(task: Task, project_name: str = "未知项目") -> str:
@@ -44,17 +45,10 @@ def format_task(task: Task, project_name: str = "未知项目") -> str:
 
     # 截止日期
     if task.due_date:
-        # 格式化日期显示
         try:
-            from datetime import datetime
-            if isinstance(task.due_date, str):
-                # 尝试解析ISO格式日期
-                if 'T' in task.due_date:
-                    dt = datetime.fromisoformat(task.due_date.replace('Z', '+00:00'))
-                    due_str = dt.strftime("%Y-%m-%d %H:%M")
-                else:
-                    due_str = task.due_date
-                lines.append(f"截止: {due_str}")
+            # 使用 TimeUtils 将UTC时间转换为本地时间
+            local_due_date = TimeUtils.format_due_date(task.due_date, style='full')
+            lines.append(f"截止: {local_due_date}")
         except:
             lines.append(f"截止: {task.due_date}")
 
@@ -126,12 +120,8 @@ def format_task_list(tasks: List[Task], projects: Dict[str, str]) -> str:
                 due_info = ""
                 if task.due_date:
                     try:
-                        from datetime import datetime
-                        if isinstance(task.due_date, str) and 'T' in task.due_date:
-                            dt = datetime.fromisoformat(task.due_date.replace('Z', '+00:00'))
-                            due_info = f"截止: {dt.strftime('%m-%d')}"
-                        else:
-                            due_info = f"截止: {str(task.due_date)[:10]}"
+                        # 使用 TimeUtils 将UTC时间转换为本地时间
+                        due_info = f"截止: {TimeUtils.format_due_date(task.due_date, '%m-%d')}"
                     except:
                         due_info = f"截止: {str(task.due_date)[:10]}"
 
