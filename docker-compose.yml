@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  didabot:
+    build: .
+    # 使用host网络消除NAT层
+    network_mode: host
+    # 如果不能用host网络，可以用下面的配置替代：
+    # networks:
+    #   - app-network
+    #
+    # # 配置更快的DNS
+    # dns:
+    #   - 8.8.8.8
+    #   - 1.1.1.1
+    #   - 223.5.5.5  # 阿里DNS，国内更快
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    # 资源限制，避免性能问题
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+# 如果不能用host网络，使用这个网络配置
+# networks:
+#   app-network:
+#     driver: bridge
+#     driver_opts:
+#       com.docker.network.bridge.name: dida-bridge
